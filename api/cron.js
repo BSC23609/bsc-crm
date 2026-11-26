@@ -4,12 +4,20 @@
 import { del } from '@vercel/blob';
 import { route, send, getSql, query } from './_lib.js';
 import { runMailSync } from './_mail.js';
+import { waitUntil } from '@vercel/functions';
 
 export default route(async (req, res) => {
   const want = process.env.CRON_SECRET || '';
   if (!want || req.headers.authorization !== `Bearer ${want}`) return send(res, 401, { error: 'bad cron secret' });
-  // Mailbox reader: called every 15 minutes by the GitHub Actions workflow .github/workflows/mail-sync.yml
-  if (query(req).get('job') === 'mail') return send(res, 200, await runMailSync({ budgetMs: 240000, who: 'schedule' }));
+  // Mailbox reader: called every 15 minutes by an external cron job (cron-job.org / Task Scheduler).
+  // Answers at once and keeps reading in the background (up to ~4 min), so short cron timeouts are fine.
+  // Add &wait=1 to wait for the result instead.
+  if (query(req).get('job') === 'mail') {
+    const run = runMailSync({ budgetMs: 240000, who: 'schedule' });
+    if (query(req).get('wait')) return send(res, 200, await run);
+    waitUntil(run.catch(() => {}));
+    return send(res, 202, { ok: true, started: true, note: 'Reading mail in the background; see the Mail tab for the result' });
+  }
   const sql = getSql();
   const stale = await sql`SELECT id FROM crm_kyc WHERE status = 'draft' AND created_at < now() - interval '3 days'`;
   for (const { id } of stale) {

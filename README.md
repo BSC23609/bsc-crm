@@ -129,7 +129,11 @@ Every 15 minutes the CRM reads new mail in info@bharatsteels.in (all folders). I
    | `MAIL_AI_MODEL` | optional, default `claude-haiku-5-5` |
    | `MAIL_IGNORE_DOMAINS` | optional, extra domains never to read, comma separated |
 
-4. **GitHub** → repo `bsc-crm` → Settings → Secrets and variables → Actions → New repository secret `CRON_SECRET`, with the same value as `CRON_SECRET` in Vercel. The workflow **Mail check** (`.github/workflows/mail-sync.yml`) then runs every 15 minutes. To run it at once: Actions → Mail check → Run workflow, or **Check mail now** on the Mail tab (admins).
+4. **Cron job, every 15 minutes** (cron-job.org or any scheduler):
+   - URL: `https://crm.bharatsteels.in/api/cron?job=mail`, method **GET**
+   - Header: `Authorization` = `Bearer <CRON_SECRET>`, with the same value as `CRON_SECRET` in Vercel
+   - Schedule: every 15 minutes. The CRM answers at once (`202 started`) and keeps reading in the background for up to 4 minutes, so a 30-second timeout is fine.
+   - To run it at once: **Check mail now** on the Mail tab (admins). Add `&wait=1` to the URL to wait for the result when testing.
 5. **Retire the old pipeline**: in the old Enquiry Capture repo, Actions → its workflow → ⋯ → **Disable workflow**, so mails are not processed twice.
 
 The first run of 90 days of mail takes a few runs (about 100–150 mails a run); the Mail tab shows "more to go" until it catches up. Cost: roughly ₹0.3–1 per mail read by Claude (more when PDFs are read); filtered mail costs nothing. "All mails" on the Mail tab shows every mail and what was done with it, including token usage.
