@@ -9,7 +9,10 @@ const env = (k, d = '') => String(process.env[k] ?? d).trim().replace(/^['"]|['"
 export const emailReady = () => !!(env('SMTP_HOST') && env('SMTP_USER') && env('SMTP_PASS'));
 export const whatsappReady = () => !!(watiBase() && env('WATI_TOKEN'));
 // Links sent to customers always use the official address, whichever address staff opened the CRM on.
-export const appUrl = () => (env('APP_URL') || 'https://crm.bharatsteels.in').replace(/\/+$/, '');
+export const appUrl = () => {
+  const u = env('APP_URL').replace(/\/+$/, '');
+  return u && !/\.vercel\.app$/i.test(u) ? u : 'https://crm.bharatsteels.in';   // never hand customers a *.vercel.app address
+};
 
 function watiBase() {
   let b = env('WATI_BASE_URL').replace(/\/+$/, '');

@@ -48,6 +48,15 @@
           "value": "strict-origin-when-cross-origin"
         }
       ]
+    },
+    {
+      "source": "/(index.html|app.js|app.css|kyc.html|feedback.html|forms.css)?",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, must-revalidate"
+        }
+      ]
     }
   ]
 }
