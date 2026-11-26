@@ -34,9 +34,9 @@ Follow `sap-sync/INSTALL.md`: copy `refresh_crm.ps1` to `C:\scripts`, add `crm_u
 
 ### 2. Deploy the CRM (Vercel + Neon)
 
-1. **GitHub** – new repo `BSC23609/crm` (private is fine), push this folder (the `sap-sync` folder can stay in it; Vercel ignores it).
-2. **Neon** – new project `crm`, region Singapore, copy the **pooled** connection string.
-3. **Vercel** – Add New → Project → import `BSC23609/crm`, Framework **Other**, no build command. Environment variables:
+1. **GitHub** – repo `BSC23609/bsc-crm` (the `sap-sync` folder can stay in it; Vercel ignores it).
+2. **Neon** – new project `bsc-crm`, region Singapore, copy the **pooled** connection string.
+3. **Vercel** – Add New → Project → import `BSC23609/bsc-crm`, Framework **Other**, no build command. Environment variables:
 
    | Name | Value |
    |---|---|
