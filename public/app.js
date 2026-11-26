@@ -455,6 +455,55 @@ const ARF = { q: '', branch: '', exe: '', overdue: true, bucket: '', sort: 'amt'
 const arBucket = d => d <= 0 ? 0 : d <= 30 ? 1 : d <= 60 ? 2 : d <= 90 ? 3 : 4;
 const AR_BUCKETS = ['Not due', '1–30 days', '31–60', '61–90', '90+ days'];
 const arDays = d => d <= 0 ? `<span class="muted">${d === 0 ? 'due today' : 'in ' + -d + 'd'}</span>` : `<b style="color:${d > 60 ? 'var(--bad)' : d > 30 ? 'var(--warn)' : 'var(--ink)'}">${d}</b>`;
+// Payment reminder by WhatsApp (WATI template) + email from info@bharatsteels.in. pre: codes ticked at start.
+function remindModal(groups, pre, done) {
+  const sel = new Set(pre);
+  const one = pre.length === 1 ? groups.find(g => g.code === pre[0]) : null;
+  const waOk = S.meta.whatsappReady, emOk = S.meta.emailReady;
+  modal(`<h2>${one ? 'Send payment reminder' : 'Send payment reminders'}</h2>
+    <p class="small muted" style="margin-top:-8px">Sends each company a WhatsApp message and an email from info@bharatsteels.in with the company name, total outstanding and the open bills. Amounts are taken fresh from SAP when sending.</p>
+    ${one ? `<div class="card" style="margin:0 0 10px;padding:12px 14px"><b>${esc(one.name)}</b> <span class="muted small">${esc(one.code)}</span>
+        <div style="margin-top:4px">Outstanding <b>${inr(one.amt)}</b>${one.over ? ` · overdue <b style="color:var(--bad)">${inr(one.over)}</b>` : ''} · ${one.inv.length} bill(s)</div>
+        <div class="small muted" style="margin-top:4px">💬 ${esc(one.mobile || 'no mobile')} · ✉️ ${esc(one.email || 'no email')}</div></div>`
+      : `<div class="toolbar" style="margin:0 0 6px"><input type="search" id="rq" placeholder="Search company"><button class="btn sm sec" id="rAll">Select all shown</button><button class="btn sm sec" id="rNone">Clear</button><span class="sp"></span><b id="rCount"></b></div>
+        <div class="tw" style="max-height:340px"><table id="rList"></table></div>`}
+    <div class="f" style="margin-top:10px"><label>Send by</label>
+      <label style="display:inline-block;margin-right:18px;font-weight:500;color:var(--ink)"><input type="checkbox" id="rWA" ${waOk ? 'checked' : 'disabled'}> WhatsApp${waOk ? '' : ' (WATI not set up)'}</label>
+      <label style="display:inline-block;font-weight:500;color:var(--ink)"><input type="checkbox" id="rEM" ${emOk ? 'checked' : 'disabled'}> Email${emOk ? '' : ' (SMTP not set up)'}</label></div>
+    <div class="err" id="rErr"></div><div id="rOut"></div>
+    <div class="acts"><button class="btn sec" onclick="closeModal()">Close</button><button class="btn" id="rGo">Send</button></div>`, one ? '' : 'wide');
+  const list = () => {
+    if (one) return;
+    const q = norm($('#rq').value).trim();
+    const shown = groups.filter(g => !q || norm(g.name).includes(q) || norm(g.code).includes(q));
+    $('#rList').innerHTML = `<tr><th></th><th>Company</th><th class="n">Outstanding</th><th class="n">Overdue</th><th class="n">Max days</th><th>Mobile / email</th></tr>` + shown.map(g => `<tr>
+      <td><input type="checkbox" data-rc="${esc(g.code)}" ${sel.has(g.code) ? 'checked' : ''} ${g.mobile || g.email ? '' : 'disabled'}></td>
+      <td><b>${esc(g.name)}</b><div class="small muted">${esc(g.code)} · ${esc(g.exe || '')}</div></td><td class="n">${inrShort(g.amt)}</td>
+      <td class="n" style="${g.over ? 'color:var(--bad)' : ''}">${g.over ? inrShort(g.over) : '—'}</td><td class="n">${arDays(g.days)}</td>
+      <td class="small">${g.mobile ? '💬 ' + esc(g.mobile) : '<span class="muted">no mobile</span>'}<br>${g.email ? '✉️ ' + esc(g.email) : '<span class="muted">no email</span>'}</td></tr>`).join('');
+    $$('[data-rc]').forEach(c => c.onchange = () => { c.checked ? sel.add(c.dataset.rc) : sel.delete(c.dataset.rc); count(); });
+    $('#rAll').onclick = () => { shown.forEach(g => { if (g.mobile || g.email) sel.add(g.code); }); list(); };
+    count();
+  };
+  const count = () => { if (!one) { const t = groups.filter(g => sel.has(g.code)).reduce((a, g) => a + g.amt, 0); $('#rCount').textContent = `${sel.size} selected · ${inrShort(t)}`; } };
+  if (!one) { $('#rq').oninput = list; $('#rNone').onclick = () => { sel.clear(); list(); }; list(); }
+  $('#rGo').onclick = async () => {
+    const wa = $('#rWA').checked, em = $('#rEM').checked;
+    if (!sel.size) { $('#rErr').textContent = 'Select at least one company'; return; }
+    if (!wa && !em) { $('#rErr').textContent = 'Tick WhatsApp or Email'; return; }
+    if (sel.size > 1 && !confirm(`Send payment reminders to ${sel.size} companies?`)) return;
+    $('#rGo').disabled = true; $('#rGo').textContent = `Sending to ${sel.size}…`; $('#rErr').textContent = '';
+    try {
+      const r = await api('/api/customers', { action: 'ar_remind', codes: [...sel], whatsapp: wa, email: em });
+      const okN = r.results.filter(x => x.ok).length;
+      $('#rGo').remove();
+      $('#rOut').innerHTML = `<div class="banner ${okN === r.results.length ? 'ok' : okN ? 'warn' : 'bad'}" style="margin:8px 0">Sent to ${okN} of ${r.results.length} compan${r.results.length === 1 ? 'y' : 'ies'}.</div>
+        <div class="tw" style="max-height:260px"><table class="small">${r.results.map(x => `<tr><td><b>${esc(x.company || x.code)}</b>${x.amount ? `<div class="muted">${inr(x.amount)}</div>` : ''}</td>
+          <td>${x.message ? `<span style="color:var(--bad)">${esc(x.message)}</span>` : [x.wa, x.email].filter(Boolean).map(m => `<div style="color:${m.ok ? 'var(--ok)' : 'var(--bad)'}">${m.ok ? '✓' : '✗'} ${esc(m.message)}</div>`).join('')}</td></tr>`).join('')}</table></div>`;
+      done && done();
+    } catch (e) { $('#rErr').textContent = e.message; $('#rGo').disabled = false; $('#rGo').textContent = 'Send'; }
+  };
+}
 async function viewAR() {
   loading();
   const d = await api('/api/customers?ar=1');
@@ -471,7 +520,7 @@ async function viewAR() {
       <select id="are">${opts(exes, ARF.exe, 'All executives')}</select>
       <label class="small nowrap"><input type="checkbox" id="aro" ${ARF.overdue ? 'checked' : ''}> Overdue only</label>
       <select id="ars">${opts([['amt', 'Sort: outstanding'], ['days', 'Sort: days overdue'], ['name', 'Sort: name']], ARF.sort, null)}</select>
-      <span class="sp"></span><span class="muted small" id="arc"></span><button class="btn sm sec" id="arx">Export Excel</button></div>
+      <span class="sp"></span><span class="muted small" id="arc"></span>${canEdit() ? '<button class="btn sm" id="arRem">📨 Send reminder</button>' : ''}<button class="btn sm sec" id="arx">Export Excel</button></div>
     <div class="tw" id="arT"></div>
     <div class="card" style="margin-top:16px"><h2>By executive</h2><div id="arE"></div></div>`;
   let groups = [], rows = [];
@@ -499,18 +548,21 @@ async function viewAR() {
       + `<div class="toolbar" style="margin:10px 0 0">${AR_BUCKETS.map((l, i) => `<button class="btn sm ${ARF.bucket === String(i) ? '' : 'sec'}" data-bk="${i}">${l}</button>`).join('')}${ARF.bucket !== '' ? '<button class="btn sm sec" data-bk="">Clear</button>' : ''}</div>`;
     $$('[data-bk]').forEach(b => b.onclick = () => { ARF.bucket = ARF.bucket === b.dataset.bk ? '' : b.dataset.bk; if (ARF.bucket === '0') { ARF.overdue = false; $('#aro').checked = false; } draw(); });
     $('#arc').textContent = `${groups.length} customers`;
-    $('#arT').innerHTML = `<table><tr><th style="width:26px"></th><th>Customer</th><th>Branch</th><th>Executive</th><th class="n">Bills</th><th class="n">Max days</th><th class="n">Overdue</th><th class="n">Outstanding</th><th></th></tr>
+    $('#arT').innerHTML = `<table><tr><th style="width:26px"></th><th>Customer</th><th>Branch</th><th>Executive</th><th class="n">Bills</th><th class="n">Max days</th><th class="n">Overdue</th><th class="n">Outstanding</th><th>Send reminder</th><th></th></tr>
       ${groups.map(g => { const k = d.customers[g.code], open = ARF.open.has(g.code);
-        const msg = `Dear ${g.name},\nThis is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of ${inr(g.over || g.amt)} is ${g.over ? 'overdue' : 'outstanding'} against ${g.inv.length} bill(s):\n${g.inv.slice(0, 8).map(i => `• ${i.bill_no} dt ${fdate(i.bill_date)} – ${inr(i.amount)}${i.days > 0 ? ` (${i.days} days overdue)` : ''}`).join('\n')}${g.inv.length > 8 ? '\n…' : ''}\nKindly arrange the payment at the earliest. Please ignore if already paid.\nThank you.`;
+        const rm = d.reminders && d.reminders[g.code];
         return `<tr class="click" data-tg="${esc(g.code)}"><td>${open ? '▾' : '▸'}</td>
         <td>${k ? `<a href="#/c/${encodeURIComponent(g.code)}"><b>${esc(g.name)}</b></a>` : `<b>${esc(g.name)}</b>`}<div class="small muted">${esc(g.code)}${k && k.open_followups ? ` · <span class="chip warn">${k.open_followups} follow-up</span>` : ''}${k && k.last_activity ? ` · last contact ${fdate(k.last_activity)}` : ''}</div></td>
         <td>${esc(g.branch)}</td><td>${esc(g.exe)}</td><td class="n">${g.inv.length}</td><td class="n">${arDays(g.days)}</td>
         <td class="n" style="${g.over ? 'color:var(--bad);font-weight:600' : ''}">${g.over ? inrShort(g.over) : '—'}</td><td class="n"><b>${inrShort(g.amt)}</b>${k && k.credit_line ? `<div class="small muted">limit ${inrShort(k.credit_line)}</div>` : ''}</td>
-        <td class="nowrap">${g.mobile ? `<a class="btn sm sec" target="_blank" rel="noopener" href="${esc(waLink(g.mobile, msg))}" data-tip="Opens WhatsApp with a payment reminder">💬 Remind</a>` : ''} ${canEdit() && k ? `<button class="btn sm sec" data-arlog="${esc(g.code)}">📞 Log</button>` : ''}</td></tr>
-        ${open ? `<tr><td></td><td colspan="8" style="background:#f8fafc"><table class="small"><tr><th>Bill no.</th><th>Bill date</th><th>Due date</th><th class="n">Days overdue</th><th class="n">Outstanding</th></tr>
+        <td class="nowrap">${canEdit() ? `<button class="btn sm" data-arsend="${esc(g.code)}" ${g.mobile || g.email ? '' : 'disabled title="No mobile or email in SAP"'}>📨 Send</button>` : ''}
+          ${rm ? `<div class="small muted" data-tip="${esc(`Last reminder ${fdt(rm.sent_at)} by ${rm.sent_by || ''}<br>WhatsApp: ${rm.wa_ok == null ? 'not sent' : rm.wa_ok ? 'sent' : 'failed'}<br>Email: ${rm.email_ok == null ? 'not sent' : rm.email_ok ? 'sent' : 'failed'}`)}">Sent ${fdate(rm.sent_at)} ${rm.wa_ok ? '💬' : ''}${rm.email_ok ? '✉️' : ''}${rm.wa_ok === false || rm.email_ok === false ? ' ⚠️' : ''}</div>` : ''}</td>
+        <td class="nowrap">${canEdit() && k ? `<button class="btn sm sec" data-arlog="${esc(g.code)}">📞 Log</button>` : ''}</td></tr>
+        ${open ? `<tr><td></td><td colspan="9" style="background:#f8fafc"><table class="small"><tr><th>Bill no.</th><th>Bill date</th><th>Due date</th><th class="n">Days overdue</th><th class="n">Outstanding</th></tr>
           ${g.inv.map(i => `<tr><td>${esc(i.bill_no)}</td><td>${fdate(i.bill_date)}</td><td>${fdate(i.due_date)}</td><td class="n">${arDays(i.days)}</td><td class="n">${inr(i.amount)}</td></tr>`).join('')}</table>
           <div class="small muted" style="margin-top:6px">${[g.mobile && '📱 ' + esc(g.mobile), g.email && '✉️ ' + esc(g.email)].filter(Boolean).join(' · ')}</div></td></tr>` : ''}`; }).join('')}</table>${groups.length ? '' : '<div class="empty">Nothing matches these filters.</div>'}`;
     $$('#arT [data-tg]').forEach(tr => tr.onclick = e => { if (e.target.closest('a,button')) return; const c = tr.dataset.tg; ARF.open.has(c) ? ARF.open.delete(c) : ARF.open.add(c); draw(); });
+    $$('[data-arsend]').forEach(b => b.onclick = () => remindModal(groups, [b.dataset.arsend], reload));
     $$('[data-arlog]').forEach(b => b.onclick = () => activityModal({ card_code: b.dataset.arlog, type: 'call', subject: 'Payment follow-up', follow_up_at: addDays(today(), 3) }, () => { api('/api/customers?ar=1').then(x => { d.customers = x.customers; draw(); }); }));
     // by executive (respects branch + search, shows all ageing)
     const em = new Map(); base.forEach(r => { const e = em.get(r.executive) || { n: new Set(), amt: 0, over: 0, o60: 0 }; e.n.add(r.card_code); e.amt += r.amount; if (r.days > 0) e.over += r.amount; if (r.days > 60) e.o60 += r.amount; em.set(r.executive, e); });
@@ -523,6 +575,8 @@ async function viewAR() {
   $('#are').onchange = e => { ARF.exe = e.target.value; draw(); };
   $('#aro').onchange = e => { ARF.overdue = e.target.checked; draw(); };
   $('#ars').onchange = e => { ARF.sort = e.target.value; draw(); };
+  const reload = async () => { const x = await api('/api/customers?ar=1'); d.customers = x.customers; d.reminders = x.reminders; draw(); };
+  if ($('#arRem')) $('#arRem').onclick = () => remindModal(groups, [], reload);
   $('#arx').onclick = () => {
     const out = groups.flatMap(g => g.inv);
     downloadXlsx(`BSC-receivables-${today()}.xlsx`, 'Receivables', [

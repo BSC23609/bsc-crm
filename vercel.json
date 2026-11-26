@@ -65,6 +65,9 @@
     },
     "api/crm.js": {
       "maxDuration": 120
+    },
+    "api/customers.js": {
+      "maxDuration": 300
     }
   }
 }

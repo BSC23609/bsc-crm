@@ -1,5 +1,6 @@
 import { route, send, readBody, getSql, needUser, query, audit, clean, cleanMulti, SEGMENTS, BUYER_TYPES, USAGE, REG_TYPES } from './_lib.js';
 import { sapStatus, customer360, moreRows } from './_sap.js';
+import { sendReminderWhatsApp, sendReminderEmail, appUrl } from './_notify.js';
 
 // Accounts receivable: the same receivables.csv the MIS portal reads (published by refresh_receivables.ps1 on the SAP box).
 const AR_URL = () => process.env.AR_CSV_URL || 'https://raw.githubusercontent.com/BSC23609/bsc-stock-data/main/receivables.csv';
@@ -57,6 +58,34 @@ export default route(async (req, res) => {
       await audit(me.email, 'profile', { code });
       return send(res, 200, { ok: true });
     }
+    if (b.action === 'ar_remind') {   // payment reminder by WhatsApp + email; amounts are re-read here, never taken from the browser
+      const codes = [...new Set((Array.isArray(b.codes) ? b.codes : []).map(c => clean(c, 40)).filter(Boolean))].slice(0, 150);
+      if (!codes.length) return send(res, 400, { error: 'Select at least one customer' });
+      const ar = await receivables();
+      const logo = appUrl() + '/img/bsc-logo.png';
+      const known = new Set((await sql`SELECT card_code FROM crm_customers WHERE card_code = ANY(${codes}::text[])`).map(r => r.card_code));
+      const one = async code => {
+        const inv = ar.rows.filter(r => r.card_code === code);
+        if (!inv.length) return { code, ok: false, message: 'No open bills any more' };
+        const g = { company: inv[0].name, amount: inv.reduce((a, r) => a + r.amount, 0), overdue: inv.filter(r => r.days > 0).reduce((a, r) => a + r.amount, 0),
+          bills: inv.slice().sort((x, y) => y.days - x.days) };
+        if (g.amount <= 0) return { code, company: g.company, ok: false, message: 'Nothing outstanding' };
+        const phone = inv.map(r => r.mobile).find(p => String(p || '').replace(/\D/g, '').length >= 10) || inv.map(r => r.phone).find(p => /^(\+?91|0)?[6-9]\d{9}$/.test(String(p || '').replace(/[\s-]/g, ''))) || '';
+        const email = inv.map(r => r.email).find(e => /@/.test(e || '')) || '';
+        const [wa, em] = await Promise.all([b.whatsapp === false ? null : sendReminderWhatsApp(phone, g), b.email === false ? null : sendReminderEmail(email, g, logo)]);
+        await sql`INSERT INTO crm_ar_reminders (card_code, company, amount, overdue, bills, phone, email, wa_ok, email_ok, detail, sent_by)
+          VALUES (${code}, ${g.company}, ${g.amount}, ${g.overdue}, ${g.bills.length}, ${phone || null}, ${email || null}, ${wa ? wa.ok : null}, ${em ? em.ok : null},
+                  ${JSON.stringify({ wa: wa?.message, email: em?.message })}::jsonb, ${me.email})`;
+        if (known.has(code) && (wa?.ok || em?.ok)) await sql`INSERT INTO crm_activities (card_code, type, subject, notes, done, owner_email, created_by)
+          VALUES (${code}, ${wa?.ok ? 'whatsapp' : 'email'}, ${'Payment reminder sent – ' + Math.round(g.amount).toLocaleString('en-IN')},
+                  ${[wa?.message, em?.message].filter(Boolean).join('\n')}, true, ${me.email}, ${me.email})`;
+        return { code, company: g.company, amount: g.amount, ok: !!(wa?.ok || em?.ok), wa, email: em };
+      };
+      const results = [];
+      for (let i = 0; i < codes.length; i += 4) results.push(...await Promise.all(codes.slice(i, i + 4).map(c => one(c).catch(e => ({ code: c, ok: false, message: e.message })))));
+      await audit(me.email, 'ar_remind', { n: codes.length, ok: results.filter(r => r.ok).length });
+      return send(res, 200, { results });
+    }
     return send(res, 400, { error: 'Unknown action' });
   }
 
@@ -70,7 +99,9 @@ export default route(async (req, res) => {
         (SELECT MAX(created_at) FROM crm_activities a WHERE a.card_code = c.card_code) AS last_activity,
         (SELECT COUNT(*)::int FROM crm_activities a WHERE a.card_code = c.card_code AND NOT a.done AND a.follow_up_at IS NOT NULL) AS open_followups
       FROM crm_customers c LEFT JOIN crm_profiles p ON p.card_code = c.card_code WHERE c.card_code = ANY($1::text[])`, [codes]) : [];
-    return send(res, 200, { rows: ar.rows, fetched: ar.fetched, customers: Object.fromEntries(known.map(k => [k.card_code, k])) });
+    const rem = codes.length ? await sql`SELECT DISTINCT ON (card_code) card_code, sent_at, sent_by, wa_ok, email_ok, amount::float AS amount FROM crm_ar_reminders
+      WHERE card_code = ANY(${codes}::text[]) ORDER BY card_code, sent_at DESC` : [];
+    return send(res, 200, { rows: ar.rows, fetched: ar.fetched, customers: Object.fromEntries(known.map(k => [k.card_code, k])), reminders: Object.fromEntries(rem.map(r => [r.card_code, r])) });
   }
 
   const code = q.get('code');
