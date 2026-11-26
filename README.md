@@ -61,6 +61,37 @@ PR **BSC23609/bsg-hub#1** adds "Customer CRM" (single sign-on, email identity) t
 - **Feedback**: Microsoft Forms → Responses → *Open results in Excel* → CRM → Feedback → *Import Microsoft Forms*.
 - Change the feedback e-mail link `bit.ly/bsc-customer-feedback-form` to point at `https://crm.bharatsteels.in/feedback` (and regenerate the QR from the Feedback page). Replace the Google Form link with `https://crm.bharatsteels.in/kyc`.
 
+### 5. Email and WhatsApp for the ledger-form link
+
+"Send ledger form" (Ledger forms page, customer page or lead) creates a personal link and sends it to the customer:
+an **email from info@bharatsteels.in** with a button and QR code, and a **WhatsApp message via WATI** with the link.
+"Send link again" on a request re-sends it (e.g. to a corrected email or number); every send is logged on the request.
+
+Add to Vercel → bsc-crm → Environment Variables, then redeploy:
+
+| Name | Value |
+|---|---|
+| `SMTP_HOST` | `smtp.office365.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `info@bharatsteels.in` |
+| `SMTP_PASS` | the mailbox password (or app password) |
+| `SMTP_FROM` | `info@bharatsteels.in` |
+| `SMTP_FROM_NAME` | `Bharat Steel (Chennai) Pvt. Ltd.` (optional) |
+| `WATI_BASE_URL` | same as in the other group apps |
+| `WATI_TOKEN` | same as in the other group apps |
+| `WATI_KYC_TEMPLATE` | `bsc_ledger_form` (optional, this is the default) |
+| `APP_URL` | `https://crm.bharatsteels.in` (optional; makes the links use the custom address) |
+
+Microsoft 365: *Authenticated SMTP* must be enabled for the info@ mailbox (M365 admin centre → Users → info@ → Mail → Manage email apps → tick **Authenticated SMTP**).
+
+WATI: create and get approved a template named **bsc_ledger_form** (category **Utility**), body for example:
+
+    Dear {{1}},
+    To open the customer ledger for {{2}} with Bharat Steel (Chennai) Pvt. Ltd., please fill in the Ledger Creation Data Sheet here: {{3}}
+    Please keep your GST certificate and a cancelled cheque ready to upload. Thank you.
+
+({{1}} contact name, {{2}} company, {{3}} the form link.) The QR code goes in the email; on WhatsApp the customer just taps the link.
+
 ## Notes
 
 - Feedback Q3 in the current Microsoft Form shows "Fair" twice; the CRM uses Excellent / Very good / Good / Fair / Poor.

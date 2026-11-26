@@ -5,6 +5,7 @@ import { route, send, readBody, getSql, needUser, audit, loadConfig, randomToken
   BUYER_TYPES, SEGMENTS, USAGE, REG_TYPES, KYC_DOCS, KYC_STATUSES, STATE_CODES, gstinProblem, panOf, ifscOk, pinOk, phoneDigits, emailOk,
   clean, cleanMulti, canEdit, isAdmin } from './_lib.js';
 import { del } from '@vercel/blob';
+import { sendKycEmail, sendKycWhatsApp, appUrl } from './_notify.js';
 import { blobReady, blobMode, blobAccess } from './_blob.js';
 
 // SAP customer by code (a customer created in SAP reaches the CRM with the next 15-minute push).
@@ -144,6 +145,20 @@ function mapGoogleRow(headers, row) {
   return { d, links, ts };
 }
 
+// Email (info@bharatsteels.in) and/or WhatsApp the personal form link; remembers what was sent on the request.
+async function deliver(sql, req, id, token, to, opt, me) {
+  const url = `${appUrl(req)}/kyc?t=${token}`;
+  const who = { name: to.contact_person || '', company: to.company || '', url };
+  const out = [];
+  if (opt.send_email && to.email) out.push({ via: 'email', ...(await sendKycEmail({ ...who, to: to.email, logoUrl: `${appUrl(req)}/img/bsc-logo.png` })) });
+  if (opt.send_wa && to.phone) out.push({ via: 'whatsapp', ...(await sendKycWhatsApp({ ...who, phone: to.phone })) });
+  if (out.length) {
+    const log = out.map(x => ({ via: x.via, ok: x.ok, message: x.message, at: new Date().toISOString(), by: me.email }));
+    await sql`UPDATE crm_kyc SET data = jsonb_set(data, '{_sent}', COALESCE(data->'_sent', '[]'::jsonb) || ${JSON.stringify(log)}::jsonb) WHERE id = ${id}`;
+  }
+  return out;
+}
+
 export default route(async (req, res) => {
   if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
   const b = await readBody(req);
@@ -270,8 +285,19 @@ export default route(async (req, res) => {
       VALUES ('invited', ${token}, ${pre.company}, ${card}, ${JSON.stringify(pre)}::jsonb, 'invite', ${me.email}, ${b.lead_id ? Number(b.lead_id) : null}) RETURNING id`;
     await sql`UPDATE crm_kyc SET ref = ${refOf(r.id)} WHERE id = ${r.id}`;
     if (b.lead_id) await sql`UPDATE crm_leads SET kyc_id = ${r.id}, updated_at = now() WHERE id = ${Number(b.lead_id)}`;
-    await audit(me.email, 'kyc_invite', { id: r.id, company: pre.company });
-    return send(res, 200, { ok: true, id: r.id, token, phone: pre.phone, company: pre.company });
+    const sent = await deliver(sql, req, r.id, token, { ...pre, email: pre.email }, b, me);
+    await audit(me.email, 'kyc_invite', { id: r.id, company: pre.company, sent: sent.map(x => x.ok) });
+    return send(res, 200, { ok: true, id: r.id, token, phone: pre.phone, company: pre.company, sent });
+  }
+
+  if (b.action === 'resend') {   // send the personal link again (or to a corrected email / number)
+    const [r] = await sql`SELECT id, token, status, data, company FROM crm_kyc WHERE id = ${Number(b.id)}`;
+    if (!r || r.status !== 'invited' || !r.token) return send(res, 400, { error: 'This request has no open form link (already submitted?)' });
+    const to = { ...r.data, company: r.data?.company || r.company,
+                 email: clean(b.email, 160).toLowerCase() || r.data?.email, phone: phoneDigits(b.phone) || r.data?.phone };
+    const sent = await deliver(sql, req, r.id, r.token, to, { send_email: b.send_email, send_wa: b.send_wa }, me);
+    await audit(me.email, 'kyc_resend', { id: r.id, sent: sent.map(x => x.ok) });
+    return send(res, 200, { ok: true, sent });
   }
 
   if (b.action === 'export') {

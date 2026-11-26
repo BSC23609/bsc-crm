@@ -1,6 +1,7 @@
 // Activities & follow-ups, leads pipeline, dashboard.
 import { route, send, readBody, getSql, needUser, audit, loadConfig, fail, clean, cleanMulti, phoneDigits, canEdit, isAdmin, SEGMENTS, BUYER_TYPES, USAGE, REG_TYPES } from './_lib.js';
 import { sapStatus, summary } from './_sap.js';
+import { emailReady, whatsappReady } from './_notify.js';
 
 const TYPES = ['call', 'visit', 'whatsapp', 'email', 'meeting', 'complaint', 'note'];
 const STAGES = ['new', 'contacted', 'quoted', 'negotiation', 'won', 'lost'];
@@ -17,7 +18,7 @@ export default route(async (req, res) => {
     const staff = await sql`SELECT email, name, role FROM crm_users WHERE active AND role <> 'viewer' ORDER BY name, email`;
     return send(res, 200, { segments: SEGMENTS, buyerTypes: BUYER_TYPES, usage: USAGE, regTypes: REG_TYPES, stages: STAGES, types: TYPES,
       sources: cfg.leadSources, products: cfg.products, lostReasons: cfg.lostReasons, discountPerTon: cfg.discountPerTon,
-      dormantDays: cfg.dormantDays, lowScore: cfg.lowScore, staff, sapConnected: (await sapStatus()).connected });
+      dormantDays: cfg.dormantDays, lowScore: cfg.lowScore, staff, sapConnected: (await sapStatus()).connected, emailReady: emailReady(), whatsappReady: whatsappReady() });
   }
 
   /* ---------------- dashboard ---------------- */

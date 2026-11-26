@@ -3,14 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Customer CRM - Bharat Steel (Chennai) Pvt. Ltd. (crm.bharatsteels.in, Vercel + Neon, live SAP B1 via the SAP bridge)",
+  "description": "Customer CRM - Bharat Steel (Chennai) Pvt. Ltd. (crm.bharatsteels.in, Vercel + Neon, SAP B1 data pushed every 15 min by a scheduled task)",
   "dependencies": {
     "@neondatabase/serverless": "^1.0.0",
-    "@vercel/blob": "^2.9.0"
+    "@vercel/blob": "^2.9.0",
+    "nodemailer": "^6.10.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "pg": "^8.13.0"
   },
-  "scripts": { "test": "node tests/run.js" },
-  "engines": { "node": ">=18" }
+  "scripts": {
+    "test": "python3 tests/api_smoke.py"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }

@@ -660,7 +660,8 @@ async function kycDetail(id) {
   $('#main').innerHTML = `<p><a href="#/kyc">← Ledger forms</a></p>
     <div class="card"><div class="c360h"><div><h1>${esc(r.company || k.company || 'Ledger request')}</h1><div class="meta"><span>${esc(r.ref || '#' + r.id)}</span>${kycChip(r.status)}<span>Source: ${esc(r.source)}</span>
       <span>Received ${fdt(r.submitted_at || r.created_at)}</span>${r.reviewed_by ? `<span>Last action by ${esc(r.reviewed_by)}</span>` : ''}</div></div>
-      <div class="acts">${r.token && r.status === 'invited' ? `<button class="btn sec" data-copy="${esc(origin() + '/kyc?t=' + r.token)}">Copy form link</button>` : ''}${isAdmin() ? '<button class="btn danger" id="kDel">Delete</button>' : ''}</div></div></div>
+      <div class="acts">${r.token && r.status === 'invited' ? `<button class="btn sec" data-copy="${esc(origin() + '/kyc?t=' + r.token)}">Copy form link</button>${ed ? '<button class="btn" id="kRes">Send link again</button>' : ''}` : ''}${isAdmin() ? '<button class="btn danger" id="kDel">Delete</button>' : ''}</div></div></div>
+    ${(k._sent || []).length ? `<div class="card"><h2>Form link sent</h2>${k._sent.slice().reverse().map(x => `<div class="small" style="padding:4px 0">${x.ok ? '✅' : '❌'} ${x.via === 'email' ? 'Email' : 'WhatsApp'} · ${fdt(x.at)} · ${esc(x.by || '')} — ${esc(x.message)}</div>`).join('')}</div>` : ''}
     ${checks.length ? `<div class="banner bad"><b>Possible duplicate:</b><br>${checks.map(esc).join('<br>')}</div>` : ''}
     ${(k._warnings || []).length ? `<div class="banner warn"><b>Please check:</b><br>${k._warnings.map(esc).join('<br>')}</div>` : ''}
     <div class="row"><div class="card" style="flex:2"><h2>Company</h2><dl class="kv">${F('Company Name', k.company)}${F('Company Type', k.company_type)}${F('Contact Person', k.contact_person)}${F('Contact Number', k.phone)}${F('Email', k.email)}
@@ -686,6 +687,7 @@ async function kycDetail(id) {
     catch (e) { $('#kErr').textContent = e.message; }
   };
   if ($('#kEdit')) $('#kEdit').onclick = () => kycEditModal(r, () => kycDetail(id));
+  if ($('#kRes')) $('#kRes').onclick = () => resendKyc(r, () => kycDetail(id));
   if ($('#kDel')) $('#kDel').onclick = async () => { if (confirm('Delete this ledger request and its documents?')) { await api('/api/kyc', { action: 'delete', id }); location.hash = '#/kyc'; } };
 }
 function kycEditModal(r, done) {
@@ -703,21 +705,46 @@ function kycEditModal(r, done) {
     try { await api('/api/kyc', { action: 'update', id: r.id, data }); closeModal(); toast('Corrected'); done(); } catch (e) { $('#keErr').textContent = e.message; }
   };
 }
+const sentList = sent => (sent || []).map(x => `<div class="banner ${x.ok ? 'ok' : 'bad'}" style="margin:8px 0 0">${x.via === 'email' ? '✉️' : '💬'} ${esc(x.message)}</div>`).join('');
+const sendChecks = () => `<div class="f"><label>Send the link to the customer</label>
+  <label style="display:block;font-weight:500;color:var(--ink);margin:4px 0"><input type="checkbox" id="iSE" ${S.meta.emailReady ? 'checked' : 'disabled'}> By email from info@bharatsteels.in (with QR code)${S.meta.emailReady ? '' : ' <span class="muted small">— email not set up yet</span>'}</label>
+  <label style="display:block;font-weight:500;color:var(--ink);margin:4px 0"><input type="checkbox" id="iSW" ${S.meta.whatsappReady ? 'checked' : 'disabled'}> By WhatsApp (WATI)${S.meta.whatsappReady ? '' : ' <span class="muted small">— WhatsApp not set up yet</span>'}</label></div>`;
 function inviteKyc(pre) {
   modal(`<h2>Send ledger form</h2><p class="small muted" style="margin-top:-8px">Creates a personal link with these details filled in. The customer completes the rest and uploads documents.</p>
     <div class="fg"><div class="f"><label>Company *</label><input id="iC" value="${esc(pre.company || '')}"></div><div class="f"><label>Contact person</label><input id="iP" value="${esc(pre.contact_person || '')}"></div>
-    <div class="f"><label>Mobile (WhatsApp)</label><input id="iM" value="${esc(pre.phone || '')}"></div><div class="f"><label>Email</label><input id="iE" value="${esc(pre.email || '')}"></div></div>
+    <div class="f"><label>Mobile (WhatsApp)</label><input id="iM" value="${esc(pre.phone || '')}"></div><div class="f"><label>Email</label><input id="iE" type="email" value="${esc(pre.email || '')}"></div></div>
     ${pre.card_code ? `<div class="banner info">Linked to SAP customer ${esc(pre.card_code)} — GSTIN and state are filled from SAP.</div>` : ''}
-    <div class="err" id="iErr"></div><div id="iOut"></div><div class="acts"><button class="btn sec" onclick="closeModal()">Close</button><button class="btn" id="iGo">Create link</button></div>`);
+    ${sendChecks()}
+    <div class="err" id="iErr"></div><div id="iOut"></div><div class="acts"><button class="btn sec" onclick="closeModal()">Close</button><button class="btn" id="iGo">Create link &amp; send</button></div>`);
   $('#iGo').onclick = async () => {
+    const email = $('#iE').value.trim(), phone = $('#iM').value.trim(), se = $('#iSE').checked, sw = $('#iSW').checked;
+    if (se && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { $('#iErr').textContent = 'Check the email address'; return; }
+    if (se && !email && sw && !phone) { $('#iErr').textContent = 'Enter an email or a mobile number to send the link to'; return; }
+    $('#iGo').disabled = true; $('#iGo').textContent = 'Sending…'; $('#iErr').textContent = '';
     try {
-      const r = await api('/api/kyc', { action: 'invite', company: $('#iC').value, contact_person: $('#iP').value, phone: $('#iM').value, email: $('#iE').value, card_code: pre.card_code, lead_id: pre.lead_id });
-      const url = `${origin()}/kyc?t=${r.token}`, phone = $('#iM').value;
+      const r = await api('/api/kyc', { action: 'invite', company: $('#iC').value, contact_person: $('#iP').value, phone, email, card_code: pre.card_code, lead_id: pre.lead_id,
+        send_email: se && !!email, send_wa: sw && !!phone });
+      const url = `${origin()}/kyc?t=${r.token}`;
       $('#iGo').remove();
-      $('#iOut').innerHTML = `<div style="margin-top:12px">${shareBox(url, 'Personal ledger form link')}</div>
-        ${phone ? `<a class="btn wa" style="margin-top:10px" target="_blank" rel="noopener" href="${waLink(phone, kycText(url, r.company))}">Send on WhatsApp to ${esc(phone)}</a>` : ''}`;
+      const skipped = [se && !email ? 'No email entered, so no email was sent.' : '', sw && !phone ? 'No mobile entered, so no WhatsApp was sent.' : ''].filter(Boolean);
+      $('#iOut').innerHTML = `${sentList(r.sent)}${skipped.map(t => `<div class="banner warn" style="margin:8px 0 0">${t}</div>`).join('')}
+        <div style="margin-top:12px">${shareBox(url, 'Personal ledger form link')}</div>`;
       refreshBadges();
-    } catch (e) { $('#iErr').textContent = e.message; }
+    } catch (e) { $('#iErr').textContent = e.message; $('#iGo').disabled = false; $('#iGo').textContent = 'Create link & send'; }
+  };
+}
+function resendKyc(r, done) {
+  const k = r.data || {};
+  modal(`<h2>Send the form link again</h2>
+    <div class="fg"><div class="f"><label>Mobile (WhatsApp)</label><input id="iM" value="${esc(k.phone || '')}"></div><div class="f"><label>Email</label><input id="iE" type="email" value="${esc(k.email || '')}"></div></div>
+    ${sendChecks()}<div class="err" id="iErr"></div><div id="iOut"></div>
+    <div class="acts"><button class="btn sec" id="iCl">Close</button><button class="btn" id="iGo">Send</button></div>`);
+  $('#iCl').onclick = () => { closeModal(); done(); };
+  $('#iGo').onclick = async () => {
+    $('#iGo').disabled = true;
+    try { const x = await api('/api/kyc', { action: 'resend', id: r.id, email: $('#iE').value, phone: $('#iM').value, send_email: $('#iSE').checked && !!$('#iE').value.trim(), send_wa: $('#iSW').checked && !!$('#iM').value.trim() });
+      $('#iOut').innerHTML = sentList(x.sent) || '<div class="banner warn" style="margin:8px 0 0">Nothing sent — enter an email or a mobile number.</div>'; }
+    catch (e) { $('#iErr').textContent = e.message; } finally { $('#iGo').disabled = false; }
   };
 }
 function importModal(title, help, run, done) {
