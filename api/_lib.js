@@ -235,6 +235,40 @@ export function ensureSchema() {
     await sql`CREATE INDEX IF NOT EXISTS crm_act_card ON crm_activities(card_code)`;
     await sql`CREATE INDEX IF NOT EXISTS crm_act_follow ON crm_activities(follow_up_at) WHERE done = false`;
     await sql`CREATE TABLE IF NOT EXISTS crm_audit (id SERIAL PRIMARY KEY, who TEXT, action TEXT NOT NULL, detail JSONB, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+    // Mailbox reader (info@bharatsteels.in): every mail read, and one "customer data sheet" per company found in them.
+    await sql`CREATE TABLE IF NOT EXISTS crm_mail (
+      id TEXT PRIMARY KEY,                       -- internetMessageId
+      graph_id TEXT,
+      received_at TIMESTAMPTZ NOT NULL,
+      from_email TEXT, from_name TEXT, subject TEXT, snippet TEXT,
+      has_attachments BOOLEAN NOT NULL DEFAULT false,
+      attachments JSONB NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL,                      -- skipped | done | error
+      reason TEXT,                               -- why skipped / error text
+      category TEXT, is_customer BOOLEAN NOT NULL DEFAULT false,
+      extracted JSONB,
+      party_id INT, card_code TEXT,
+      tokens INT NOT NULL DEFAULT 0, tries INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_mail_recv ON crm_mail(received_at DESC)`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_mail_by_party ON crm_mail(party_id)`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_mail_card ON crm_mail(card_code) WHERE card_code IS NOT NULL`;
+    await sql`CREATE TABLE IF NOT EXISTS crm_mail_party (
+      id SERIAL PRIMARY KEY,
+      company TEXT, contact TEXT, designation TEXT, mobile TEXT, phone TEXT, email TEXT, emails TEXT[] NOT NULL DEFAULT '{}',
+      website TEXT, domain TEXT, gstin TEXT, pan TEXT, address TEXT, city TEXT, state TEXT, pincode TEXT,
+      segment TEXT, products JSONB NOT NULL DEFAULT '[]', last_summary TEXT, last_category TEXT,
+      sap_status TEXT NOT NULL DEFAULT 'new',    -- existing | possible | new | ignored
+      card_code TEXT, match_basis TEXT, suggest_code TEXT,
+      lead_id INT, via_portal TEXT,
+      mails INT NOT NULL DEFAULT 0, first_at TIMESTAMPTZ, last_at TIMESTAMPTZ,
+      edited_fields TEXT[] NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_party_gstin ON crm_mail_party(gstin)`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_party_domain ON crm_mail_party(domain)`;
+    await sql`CREATE TABLE IF NOT EXISTS crm_mail_state (key TEXT PRIMARY KEY, value TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
     await sql`INSERT INTO crm_config (id, data) VALUES (1, ${JSON.stringify(DEFAULT_CFG)}::jsonb) ON CONFLICT (id) DO NOTHING`;
     const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM crm_users`;
     const em = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();

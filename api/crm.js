@@ -1,7 +1,8 @@
 // Activities & follow-ups, leads pipeline, dashboard.
-import { route, send, readBody, getSql, needUser, audit, loadConfig, fail, clean, cleanMulti, phoneDigits, canEdit, isAdmin, SEGMENTS, BUYER_TYPES, USAGE, REG_TYPES } from './_lib.js';
+import { route, send, readBody, getSql, needUser, audit, loadConfig, fail, clean, cleanMulti, phoneDigits, canEdit, isAdmin, gstinProblem, SEGMENTS, BUYER_TYPES, USAGE, REG_TYPES } from './_lib.js';
 import { sapStatus, summary } from './_sap.js';
 import { emailReady, whatsappReady, appUrl } from './_notify.js';
+import { runMailSync, mailStatus } from './_mail.js';
 
 const TYPES = ['call', 'visit', 'whatsapp', 'email', 'meeting', 'complaint', 'note'];
 const STAGES = ['new', 'contacted', 'quoted', 'negotiation', 'won', 'lost'];
@@ -90,6 +91,38 @@ export default route(async (req, res) => {
     return send(res, 200, { rows });
   }
 
+
+  /* ---------- Mail: customer data sheets built from info@bharatsteels.in ---------- */
+  if (b.action === 'mail_overview') {
+    const status = await mailStatus(sql);
+    const [k] = await sql`SELECT COUNT(*)::int AS mails, COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped, COUNT(*) FILTER (WHERE is_customer)::int AS customer_mails,
+        COUNT(*) FILTER (WHERE status = 'error')::int AS errors, COALESCE(SUM(tokens), 0)::int AS tokens,
+        COUNT(*) FILTER (WHERE is_customer AND received_at > now() - interval '30 days')::int AS customer30, MIN(received_at) AS oldest, MAX(received_at) AS newest FROM crm_mail`;
+    const parties = await sql`SELECT p.id, p.company, p.contact, p.designation, p.mobile, p.phone, p.email, p.city, p.state, p.gstin, p.segment, p.products, p.last_summary, p.last_category,
+        p.sap_status, p.card_code, p.match_basis, p.suggest_code, p.lead_id, p.via_portal, p.mails, p.first_at, p.last_at, c.name AS sap_name, s.name AS suggest_name, l.stage AS lead_stage
+      FROM crm_mail_party p LEFT JOIN crm_customers c ON c.card_code = p.card_code LEFT JOIN crm_customers s ON s.card_code = p.suggest_code LEFT JOIN crm_leads l ON l.id = p.lead_id
+      ORDER BY p.last_at DESC NULLS LAST LIMIT 3000`;
+    const cats = await sql`SELECT COALESCE(category, 'skipped: ' || COALESCE(reason, '')) AS k, COUNT(*)::int AS n FROM crm_mail WHERE status <> 'error' GROUP BY 1 ORDER BY 2 DESC`;
+    return send(res, 200, { status, k, parties, cats });
+  }
+  if (b.action === 'mail_party') {
+    const [p] = await sql`SELECT p.*, c.name AS sap_name, s.name AS suggest_name FROM crm_mail_party p LEFT JOIN crm_customers c ON c.card_code = p.card_code
+      LEFT JOIN crm_customers s ON s.card_code = p.suggest_code WHERE p.id = ${Number(b.id)}`;
+    if (!p) throw fail(404, 'Not found');
+    const mails = await sql`SELECT id, received_at, from_email, from_name, subject, category, extracted->>'summary' AS summary, extracted->>'action_needed' AS action_needed,
+        extracted->'products' AS products, extracted->'documents_seen' AS docs, attachments, snippet FROM crm_mail WHERE party_id = ${p.id} ORDER BY received_at DESC LIMIT 100`;
+    return send(res, 200, { party: p, mails, mailbox: (await mailStatus(sql)).mailbox });
+  }
+  if (b.action === 'mail_log') {
+    const f = String(b.filter || 'all');
+    const rows = await sql`SELECT id, received_at, from_email, from_name, subject, status, reason, category, is_customer, extracted->>'summary' AS summary, party_id, card_code
+      FROM crm_mail WHERE (${f} = 'all' OR (${f} = 'skipped' AND status = 'skipped') OR (${f} = 'read' AND status = 'done' AND NOT is_customer)
+        OR (${f} = 'customer' AND is_customer) OR (${f} = 'error' AND status = 'error'))
+        AND (${clean(b.q, 80)} = '' OR from_email ILIKE ${'%' + clean(b.q, 80) + '%'} OR subject ILIKE ${'%' + clean(b.q, 80) + '%'})
+      ORDER BY received_at DESC LIMIT 500`;
+    return send(res, 200, { rows });
+  }
+
   if (!canEdit(me)) throw fail(403, 'You have view-only access');
 
   if (b.action === 'activity_save') {
@@ -150,6 +183,50 @@ export default route(async (req, res) => {
         RETURNING id`;
     }
     await audit(me.email, 'lead_save', { id, stage });
+    return send(res, 200, { ok: true, id });
+  }
+
+  if (b.action === 'mail_sync') {
+    if (!isAdmin(me)) throw fail(403, 'Admins only');
+    return send(res, 200, await runMailSync({ budgetMs: 80000, who: me.email }));
+  }
+  if (b.action === 'mail_party_save') {   // staff corrections, SAP link, ignore
+    const id = Number(b.id); const [p] = await sql`SELECT * FROM crm_mail_party WHERE id = ${id}`;
+    if (!p) throw fail(404, 'Not found');
+    const F = ['company', 'contact', 'designation', 'mobile', 'phone', 'email', 'website', 'gstin', 'pan', 'address', 'city', 'state', 'pincode', 'segment'];
+    const v = {}, edited = new Set(p.edited_fields);
+    for (const f of F) { v[f] = p[f]; if (b.fields && f in b.fields) { const n = clean(b.fields[f], f === 'address' ? 400 : 200) || null; if (n !== p[f]) { v[f] = n; edited.add(f); } } }
+    if (v.gstin) { v.gstin = v.gstin.toUpperCase(); const e = gstinProblem(v.gstin); if (e) return send(res, 400, { error: e }); }
+    let { sap_status: st, card_code: card, match_basis: basis } = p;
+    if (b.sap === 'ignore') { st = 'ignored'; }
+    else if (b.sap === 'new') { st = 'new'; card = null; basis = 'set by staff'; }
+    else if (b.sap === 'unignore') { st = card ? 'existing' : 'new'; }
+    else if (b.sap) {
+      const code = clean(b.sap, 40).toUpperCase(); const [c] = await sql`SELECT card_code FROM crm_customers WHERE upper(card_code) = ${code}`;
+      if (!c) return send(res, 400, { error: 'No SAP customer with code ' + code });
+      st = 'existing'; card = c.card_code; basis = 'set by staff';
+    }
+    await sql`UPDATE crm_mail_party SET company = ${v.company}, contact = ${v.contact}, designation = ${v.designation}, mobile = ${v.mobile}, phone = ${v.phone}, email = ${v.email},
+        website = ${v.website}, gstin = ${v.gstin}, pan = ${v.pan}, address = ${v.address}, city = ${v.city}, state = ${v.state}, pincode = ${v.pincode}, segment = ${v.segment},
+        sap_status = ${st}, card_code = ${card}, match_basis = ${basis}, suggest_code = CASE WHEN ${st} = 'existing' THEN NULL ELSE suggest_code END,
+        edited_fields = ${[...edited]}, updated_at = now() WHERE id = ${id}`;
+    await sql`UPDATE crm_mail SET card_code = ${st === 'existing' ? card : null} WHERE party_id = ${id}`;
+    await audit(me.email, 'mail_party_save', { id, sap: b.sap || null });
+    return send(res, 200, { ok: true });
+  }
+  if (b.action === 'mail_party_lead') {   // new customer from mail -> lead
+    const [p] = await sql`SELECT * FROM crm_mail_party WHERE id = ${Number(b.id)}`;
+    if (!p) throw fail(404, 'Not found');
+    if (p.lead_id) return send(res, 200, { ok: true, id: p.lead_id });
+    const prod = (p.products || []).slice(0, 3).map(x => [x.item, x.grade, x.size].filter(Boolean).join(' ')).join('; ');
+    const est = (p.products || []).reduce((a, x) => a + (/^(mt|ton|tons|tonne|tonnes|t)$/i.test(x.unit || '') ? Number(String(x.qty).replace(/[^\d.]/g, '')) || 0 : 0), 0);
+    const notes = [p.last_summary, p.gstin && 'GSTIN ' + p.gstin, p.address, p.via_portal && 'Via ' + p.via_portal, `From ${p.mails} mail(s) to info@bharatsteels.in`].filter(Boolean).join('\n');
+    const [{ id }] = await sql`INSERT INTO crm_leads (company, contact, phone, email, city, segment, product, est_mt, source, stage, owner_email, next_action_at, notes, created_by)
+      VALUES (${p.company || p.contact || p.email || 'Unknown'}, ${p.contact}, ${phoneDigits(p.mobile || p.phone) || null}, ${p.email}, ${p.city}, ${null}, ${clean(prod, 120) || null},
+        ${est || null}, ${p.via_portal || 'Email'}, 'new', ${clean(b.owner_email, 120).toLowerCase() || me.email}, ${new Date(Date.now() + 864e5 + 330 * 6e4).toISOString().slice(0, 10)}, ${notes}, ${me.email})
+      RETURNING id`;
+    await sql`UPDATE crm_mail_party SET lead_id = ${id}, updated_at = now() WHERE id = ${p.id}`;
+    await audit(me.email, 'mail_party_lead', { party: p.id, lead: id });
     return send(res, 200, { ok: true, id });
   }
   if (b.action === 'lead_delete') {

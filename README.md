@@ -13,6 +13,8 @@
 | **Feedback** | Same 9 questions as the Microsoft Form. Public form at **/feedback** (`/feedback?inv=…` pre-fills the invoice). Each response is matched to the SAP invoice → customer + salesperson. Analytics: average score, CSAT %, score by question (distribution), monthly trend, by salesperson, by segment, comments. Low scores open a follow-up automatically. Tracks the Rs.50/ton discount (due / given / not applicable). Import of old Microsoft Forms responses |
 | **Follow-ups** | Overdue / today / next 7 days, mine vs everyone; mark done and set the next one |
 | **Leads** | Pipeline board (New → Contacted → Quoted → Negotiation → Won / Lost) with MT/month potential, lost reasons, activity, and "send ledger form" when won |
+| **Receivables** | Open invoices from the same `receivables.csv` the MIS portal uses: ageing, overdue / over-60 totals, by executive, per-customer bills, WhatsApp payment reminder, log a payment call, Excel export |
+| **Mail** | info@bharatsteels.in read by Claude every 15 min: customer mails only, one data sheet per company (contact, phones, GSTIN, address, requirement), checked against SAP (In SAP / Check match / New), one-click lead or ledger form, Excel export, full log of every mail (section 7) |
 | **Admin** | Users & roles (Admin / Sales / Viewer), link users to their SAP sales employee, settings (discount, low-score level, dormant days, lead sources, products), activity log |
 
 SAP is **read-only** from the CRM — nothing is written to SAP.
@@ -44,7 +46,7 @@ Follow `sap-sync/INSTALL.md`: copy `refresh_crm.ps1` to `C:\scripts`, add `crm_u
    | `SESSION_SECRET` | long random text (32+ characters) |
    | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first admin (only used while there are no users; remove the password after first sign-in) |
    | `SAP_PUSH_SECRET` | random text, 16+ characters — the same value as `crm_push_secret` in config.ini |
-   | `CRON_SECRET` | random text (daily clean-up of abandoned form drafts) |
+   | `CRON_SECRET` | random text (daily clean-up of abandoned form drafts, and the 15-minute mail check — step 7) |
    | `GROUP_SSO_SECRET` | from the group portal: Admin → Apps → Customer CRM → Show the secret |
 
    Tables are created automatically on first load.
@@ -107,6 +109,30 @@ The CRM sends `name` (contact person) and `company`.
 - Invoice matching uses the digits at the end of what the customer types (e.g. `BSC/25-26/24005` → DocNum 24005) and prefers the series whose printed number matches. Feedback for an invoice made in the last 15 minutes is matched on the next SAP run.
 - The header shows the time of the last SAP update; a failed run or no update for 45 minutes shows a warning with the reason.
 - Sales figures are taxable value (DocTotal − VAT/GST); quantities are the invoice line quantity (MT for steel items).
+
+### 7. Mail reader (info@bharatsteels.in → Claude → customer data sheets)
+
+Every 15 minutes the CRM reads new mail in info@bharatsteels.in (all folders). Internal mail, newsletters, auto-replies and no-reply senders are filtered out without AI. Every other mail goes to **Claude** (Anthropic API). Claude reads the body, the signature and any PDF or image attachments (GST certificate, PO, enquiry list, visiting card). It decides whether the sender is a customer and extracts the company, contact, phones, emails, GSTIN, address and the products and quantities asked for. Each company gets one **data sheet** (Mail tab), checked against the SAP customers by GSTIN, then email, phone, email domain and company name. The result is **In SAP**, **Check match** or **New customer**. New customers can be turned into a lead or sent the ledger form in one click. Existing customers' mails also appear on their customer page (Mails tab). The first run goes back `MAIL_BACKFILL_DAYS` (90) days; after that it only reads new mail. IndiaMART / TradeIndia / JustDial buy-leads are read too, taking the buyer's details rather than the portal's.
+
+1. **Microsoft 365 app**: reuse the existing **Enquiry Capture** app registration (Azure portal → Entra ID → App registrations). It needs the application permission **Mail.Read** with admin consent. Note its **Directory (tenant) ID** and **Application (client) ID**, and create a new **client secret** under Certificates & secrets if you no longer have the old one.
+2. **Claude**: console.anthropic.com → API keys → create a key `bsc-crm-mail` (or reuse the key the Enquiry Capture pipeline used).
+3. **Vercel** → Settings → Environment Variables, then **Redeploy**:
+
+   | Name | Value |
+   |---|---|
+   | `MS_TENANT_ID` | Directory (tenant) ID |
+   | `MS_CLIENT_ID` | Application (client) ID |
+   | `MS_CLIENT_SECRET` | client secret **value** |
+   | `ANTHROPIC_API_KEY` | `sk-ant-…` |
+   | `MAIL_MAILBOX` | optional, default `info@bharatsteels.in` |
+   | `MAIL_BACKFILL_DAYS` | optional, default `90` |
+   | `MAIL_AI_MODEL` | optional, default `claude-haiku-5-5` |
+   | `MAIL_IGNORE_DOMAINS` | optional, extra domains never to read, comma separated |
+
+4. **GitHub** → repo `bsc-crm` → Settings → Secrets and variables → Actions → New repository secret `CRON_SECRET`, with the same value as `CRON_SECRET` in Vercel. The workflow **Mail check** (`.github/workflows/mail-sync.yml`) then runs every 15 minutes. To run it at once: Actions → Mail check → Run workflow, or **Check mail now** on the Mail tab (admins).
+5. **Retire the old pipeline**: in the old Enquiry Capture repo, Actions → its workflow → ⋯ → **Disable workflow**, so mails are not processed twice.
+
+The first run of 90 days of mail takes a few runs (about 100–150 mails a run); the Mail tab shows "more to go" until it catches up. Cost: roughly ₹0.3–1 per mail read by Claude (more when PDFs are read); filtered mail costs nothing. "All mails" on the Mail tab shows every mail and what was done with it, including token usage.
 
 ## Files
 

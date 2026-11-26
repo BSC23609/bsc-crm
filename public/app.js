@@ -300,7 +300,7 @@ function sapWarn(s) {
 }
 
 /* ---------------- router ---------------- */
-const ROUTES = { '': viewDash, customers: viewCustomers, c: viewCustomer, followups: viewFollowups, leads: viewLeads, kyc: viewKyc, feedback: viewFeedback, ar: viewAR, admin: viewAdmin };
+const ROUTES = { '': viewDash, customers: viewCustomers, c: viewCustomer, followups: viewFollowups, leads: viewLeads, kyc: viewKyc, feedback: viewFeedback, ar: viewAR, mail: viewMail, admin: viewAdmin };
 function route() {
   const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
   S.hq = new URLSearchParams(qs || '');
@@ -535,6 +535,124 @@ async function viewAR() {
   draw();
 }
 
+/* ================================================================= MAIL (info@bharatsteels.in read by Claude) */
+const CAT_L = { customer_enquiry: 'Enquiry', customer_order: 'Order / PO', customer_payment_or_accounts: 'Payment / accounts', customer_complaint_or_quality: 'Complaint / quality',
+  customer_documents_or_kyc: 'Documents / KYC', customer_other: 'Customer – other', vendor_or_supplier: 'Vendor / supplier', transporter_or_logistics: 'Transporter', bank_or_finance: 'Bank / finance',
+  government_or_tax: 'Government / tax', job_application: 'Job application', marketing_or_spam: 'Marketing / spam', other: 'Other' };
+const catChip = c => `<span class="chip ${/complaint/.test(c || '') ? 'bad' : /order/.test(c || '') ? 'ok' : /enquiry/.test(c || '') ? 'info' : ''}">${esc(CAT_L[c] || c || '—')}</span>`;
+const sapChip = p => p.sap_status === 'existing' ? `<span class="chip ok">In SAP</span>` : p.sap_status === 'possible' ? '<span class="chip warn">Check match</span>'
+  : p.sap_status === 'ignored' ? '<span class="chip">Not a customer</span>' : '<span class="chip info">New customer</span>';
+const prodText = list => (list || []).slice(0, 4).map(x => [x.item, x.grade, x.size, x.qty && (x.qty + ' ' + (x.unit || ''))].filter(Boolean).join(' ')).join(' · ');
+function mailList(mails) {
+  if (!mails.length) return '<div class="empty">No mails from this customer to info@bharatsteels.in yet.</div>';
+  return `<table><tr><th>Received</th><th>From</th><th>Type</th><th>What it says</th><th>Attachments</th></tr>${mails.map(m => `<tr>
+    <td class="nowrap">${fdt(m.received_at)}</td><td>${esc(m.from_name || '')}<div class="small muted">${esc(m.from_email || '')}</div></td><td>${catChip(m.category)}</td>
+    <td><b>${esc(m.subject || '(no subject)')}</b><div class="small">${esc(m.summary || '')}</div>${prodText(m.products) ? `<div class="small muted">${esc(prodText(m.products))}</div>` : ''}${m.action_needed ? `<div class="small" style="color:var(--warn)">➜ ${esc(m.action_needed)}</div>` : ''}</td>
+    <td class="small">${(m.attachments || []).map(a => `${a.read ? '📄' : '📎'} ${esc(a.name)}`).join('<br>') || '—'}</td></tr>`).join('')}</table>`;
+}
+const MF = { tab: 'new', q: '', logF: 'customer' };
+async function viewMail() {
+  loading();
+  const d = await api('/api/crm', { action: 'mail_overview' });
+  const st = d.status, k = d.k, P = d.parties;
+  const cnt = s => P.filter(p => p.sap_status === s).length;
+  const last = st.last;
+  const conn = !st.graph || !st.ai ? `<div class="banner warn">Not connected yet: ${!st.graph ? 'add the mailbox app keys <b>MS_TENANT_ID</b>, <b>MS_CLIENT_ID</b>, <b>MS_CLIENT_SECRET</b>' : ''}${!st.graph && !st.ai ? ' and ' : ''}${!st.ai ? '<b>ANTHROPIC_API_KEY</b>' : ''} in Vercel → Settings → Environment Variables, then redeploy (README step 8).</div>` : '';
+  $('#main').innerHTML = `<h1 class="pg">Mail</h1>
+    <p class="pgsub">Mail to ${esc(st.mailbox)} is read by Claude every 15 minutes. Customer mails become a data sheet per company and are checked against SAP.
+      ${last ? `<br>Last check ${fdt(last.at)}: ${last.ok ? `${last.read} read by Claude, ${last.skipped} filtered out, ${last.customers} from customers${last.more ? ' — more to go' : ''}` : `<span style="color:var(--bad)">failed — ${esc(last.error || '')}</span>`}` : ''}
+      ${st.cursor ? ` · read up to ${fdt(st.cursor)}` : ''}</p>${conn}
+    <div class="kpis">
+      <a class="kpi" href="#/mail" data-mt="new"><div class="l">New customers found</div><div class="v">${cnt('new')}</div><div class="s">${P.filter(p => p.sap_status === 'new' && !p.lead_id).length} not yet a lead</div></a>
+      <a class="kpi ${cnt('possible') ? 'alert' : ''}" href="#/mail" data-mt="possible"><div class="l">Possible SAP matches</div><div class="v">${cnt('possible')}</div><div class="s">confirm or mark as new</div></a>
+      <a class="kpi" href="#/mail" data-mt="existing"><div class="l">Existing customers mailing</div><div class="v">${cnt('existing')}</div><div class="s">matched to SAP</div></a>
+      <div class="kpi"><div class="l">Customer mails (30 days)</div><div class="v">${k.customer30}</div><div class="s">${k.customer_mails} since ${k.oldest ? fdate(k.oldest) : '—'}</div></div>
+      <a class="kpi" href="#/mail" data-mt="log"><div class="l">Mails checked</div><div class="v">${k.mails.toLocaleString('en-IN')}</div><div class="s">${k.skipped} filtered without AI${k.errors ? ` · <span style="color:var(--bad)">${k.errors} errors</span>` : ''}</div></a>
+    </div>
+    <div class="toolbar"><div class="seg">${[['new', `New customers (${cnt('new')})`], ['possible', `Check match (${cnt('possible')})`], ['existing', `Existing (${cnt('existing')})`], ['ignored', `Not customers (${cnt('ignored')})`], ['log', 'All mails']].map(([t, l]) => `<button data-mt="${t}" class="${MF.tab === t ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <input type="search" id="mq" placeholder="Search company, person, phone, GSTIN, product" value="${esc(MF.q)}"><span class="sp"></span>
+      ${isAdmin() && st.graph && st.ai ? `<button class="btn sm sec" id="mSync" ${st.running ? 'disabled' : ''}>${st.running ? 'Checking mail…' : 'Check mail now'}</button>` : ''}<button class="btn sm sec" id="mX">Export Excel</button></div>
+    <div id="mBody"></div>`;
+  $$('[data-mt]').forEach(b => b.onclick = e => { e.preventDefault(); MF.tab = b.dataset.mt; viewMail(); });
+  $('#mq').oninput = e => { MF.q = e.target.value; draw(); };
+  if ($('#mSync')) $('#mSync').onclick = async () => {
+    const b = $('#mSync'); b.disabled = true; b.textContent = 'Checking mail… (up to 1½ min)';
+    try { const r = await api('/api/crm', { action: 'mail_sync' }); toast(r.ok ? `${r.read} read, ${r.customers} from customers${r.more ? ' — more next run' : ''}` : r.error); } catch (e) { toast(e.message); }
+    viewMail();
+  };
+  const rowsNow = () => { const q = norm(MF.q).trim(); return P.filter(p => p.sap_status === MF.tab && (!q || [p.company, p.contact, p.email, p.mobile, p.phone, p.gstin, p.city, p.card_code, p.sap_name, p.last_summary, prodText(p.products)].some(v => norm(v).includes(q)))); };
+  $('#mX').onclick = () => {
+    const rows = MF.tab === 'log' ? P : rowsNow();
+    downloadXlsx(`BSC-mail-customers-${today()}.xlsx`, 'Customer data sheet', [
+      { h: 'SAP status', v: r => ({ existing: 'In SAP', possible: 'Check match', new: 'New customer', ignored: 'Not a customer' })[r.sap_status], w: 13 }, { h: 'SAP code', k: 'card_code', w: 11 },
+      { h: 'Company', k: 'company', w: 34 }, { h: 'Contact', k: 'contact', w: 20 }, { h: 'Designation', k: 'designation', w: 16 }, { h: 'Mobile', k: 'mobile', w: 13 }, { h: 'Phone', k: 'phone', w: 13 },
+      { h: 'Email', k: 'email', w: 28 }, { h: 'GSTIN', k: 'gstin', w: 17 }, { h: 'City', k: 'city', w: 14 }, { h: 'State', k: 'state', w: 12 }, { h: 'Business', k: 'segment', w: 16 },
+      { h: 'Requirement', v: r => prodText(r.products), w: 40 }, { h: 'Latest mail', k: 'last_summary', w: 50 }, { h: 'Via', k: 'via_portal', w: 10 }, { h: 'Mails', k: 'mails', w: 7 },
+      { h: 'First mail', k: 'first_at', fmt: 'date', w: 12 }, { h: 'Last mail', k: 'last_at', fmt: 'date', w: 12 }, { h: 'Lead', v: r => r.lead_id ? STAGE_L[r.lead_stage] || 'Lead' : '', w: 10 }],
+      rows, `Bharat Steel (Chennai) Pvt. Ltd. — customers from ${st.mailbox} — ${fdate(today())}`);
+  };
+  const draw = async () => {
+    if (MF.tab === 'log') return drawLog();
+    const rows = rowsNow();
+    $('#mBody').innerHTML = rows.length ? `<div class="tw"><table><tr><th>Company / contact</th><th>Phone / email</th><th>City</th><th>Wants</th><th class="n">Mails</th><th>Last mail</th><th>SAP</th></tr>
+      ${rows.slice(0, 500).map(p => `<tr class="click" data-party="${p.id}"><td><b>${esc(p.company || p.contact || p.email)}</b>${p.via_portal ? ` <span class="chip">${esc(p.via_portal)}</span>` : ''}
+        <div class="small muted">${esc([p.contact, p.designation].filter(Boolean).join(', '))}${p.gstin ? ' · ' + esc(p.gstin) : ''}</div></td>
+        <td class="small">${esc(p.mobile || p.phone || '')}<div class="muted">${esc(p.email || '')}</div></td><td>${esc(p.city || '')}<div class="small muted">${esc(p.state || '')}</div></td>
+        <td class="small" style="max-width:320px">${catChip(p.last_category)} ${esc(p.last_summary || '')}${prodText(p.products) ? `<div class="muted">${esc(prodText(p.products))}</div>` : ''}</td>
+        <td class="n">${p.mails}</td><td class="nowrap">${fdate(p.last_at)}</td>
+        <td>${sapChip(p)}${p.card_code ? `<div class="small"><a href="#/c/${encodeURIComponent(p.card_code)}">${esc(p.card_code)}</a> · ${esc(p.match_basis || '')}</div>` : p.suggest_code ? `<div class="small muted">${esc(p.suggest_name || p.suggest_code)}?<br>${esc(p.match_basis || '')}</div>` : ''}
+          ${p.lead_id ? `<div class="small"><a href="#/leads?id=${p.lead_id}">Lead · ${esc(STAGE_L[p.lead_stage] || '')}</a></div>` : ''}</td></tr>`).join('')}</table></div>`
+      : `<div class="card empty">${P.length ? 'Nothing here.' : 'No customer mails yet. They appear here after the first mail check.'}</div>`;
+    $$('[data-party]').forEach(r => r.onclick = e => { if (!e.target.closest('a')) partyModal(+r.dataset.party, viewMail); });
+  };
+  const drawLog = async () => {
+    const r = await api('/api/crm', { action: 'mail_log', filter: MF.logF, q: MF.q });
+    const mx = Math.max(1, ...d.cats.map(c => c.n));
+    $('#mBody').innerHTML = `<div class="row"><div class="card" style="flex:1"><h2>What the mails were</h2><table>${d.cats.map(c => `<tr><td>${c.k.startsWith('skipped:') ? `<span class="muted">Filtered: ${esc(c.k.slice(9))}</span>` : catChip(c.k)}<div class="ibar" style="width:${100 * c.n / mx}%"></div></td><td class="n">${c.n}</td></tr>`).join('')}</table>
+      <p class="small muted">Claude usage so far: ${(k.tokens / 1e6).toFixed(2)} M tokens.</p></div></div>
+      <div class="toolbar"><div class="seg">${[['customer', 'From customers'], ['read', 'Read, not customers'], ['skipped', 'Filtered out'], ['error', 'Errors'], ['all', 'All']].map(([f, l]) => `<button data-lf="${f}" class="${MF.logF === f ? 'on' : ''}">${l}</button>`).join('')}</div><span class="muted small">latest 500</span></div>
+      <div class="tw"><table><tr><th>Received</th><th>From</th><th>Subject</th><th>Result</th></tr>${r.rows.map(m => `<tr ${m.party_id ? `class="click" data-party="${m.party_id}"` : ''}><td class="nowrap">${fdt(m.received_at)}</td>
+        <td>${esc(m.from_name || '')}<div class="small muted">${esc(m.from_email || '')}</div></td><td><b>${esc(m.subject || '(no subject)')}</b><div class="small">${esc(m.summary || '')}</div></td>
+        <td>${m.status === 'skipped' ? `<span class="chip">Filtered</span><div class="small muted">${esc(m.reason)}</div>` : m.status === 'error' ? `<span class="chip bad">Error</span><div class="small muted">${esc(m.reason)}</div>` : catChip(m.category)}
+          ${m.card_code ? `<div class="small"><a href="#/c/${encodeURIComponent(m.card_code)}">${esc(m.card_code)}</a></div>` : ''}</td></tr>`).join('')}</table>${r.rows.length ? '' : '<div class="empty">Nothing here.</div>'}</div>`;
+    $$('[data-lf]').forEach(b => b.onclick = () => { MF.logF = b.dataset.lf; drawLog(); });
+    $$('#mBody [data-party]').forEach(t => t.onclick = () => partyModal(+t.dataset.party, viewMail));
+  };
+  draw();
+}
+async function partyModal(id, done) {
+  const { party: p, mails } = await api('/api/crm', { action: 'mail_party', id });
+  const F = [['company', 'Company'], ['contact', 'Contact person'], ['designation', 'Designation'], ['mobile', 'Mobile'], ['phone', 'Other phone'], ['email', 'Email'],
+    ['gstin', 'GSTIN'], ['pan', 'PAN'], ['website', 'Website'], ['city', 'City'], ['state', 'State'], ['pincode', 'Pincode'], ['segment', 'Business'], ['address', 'Address']];
+  const ed = canEdit();
+  modal(`<h2>${esc(p.company || p.contact || p.email)} ${sapChip(p)}</h2>
+    <p class="small muted" style="margin-top:-8px">Customer data sheet built by Claude from ${p.mails} mail(s), ${fdate(p.first_at)} – ${fdate(p.last_at)}${p.via_portal ? ' · via ' + esc(p.via_portal) : ''}. Fields you correct are never overwritten by later mails.</p>
+    <div class="banner ${p.sap_status === 'existing' ? 'ok' : p.sap_status === 'possible' ? 'warn' : ''}" style="margin:0 0 12px">${p.sap_status === 'existing' ? `In SAP as <a href="#/c/${encodeURIComponent(p.card_code)}"><b>${esc(p.sap_name || p.card_code)}</b> (${esc(p.card_code)})</a> — matched by ${esc(p.match_basis || '')}`
+      : p.sap_status === 'possible' ? `Might be <b>${esc(p.suggest_name || p.suggest_code)}</b> (${esc(p.suggest_code)}) — ${esc(p.match_basis || '')}. Confirm or mark as new.` : p.sap_status === 'ignored' ? 'Marked as not a customer.' : 'Not found in SAP — new customer.'}
+      ${ed ? `<div class="toolbar" style="margin:8px 0 0">${p.sap_status === 'possible' ? `<button class="btn sm" data-sap="${esc(p.suggest_code)}">Yes, it's ${esc(p.suggest_code)}</button>` : ''}
+        <input id="pCode" list="pCodes" placeholder="Link to SAP code" style="width:170px"><datalist id="pCodes"></datalist><button class="btn sm sec" id="pLink">Link</button>
+        ${p.sap_status !== 'new' && p.sap_status !== 'ignored' ? '<button class="btn sm sec" data-sap="new">Mark as new customer</button>' : ''}
+        ${p.sap_status === 'ignored' ? '<button class="btn sm sec" data-sap="unignore">Undo</button>' : '<button class="btn sm sec" data-sap="ignore">Not a customer</button>'}</div>` : ''}</div>
+    <div class="fg">${F.map(([f, l]) => `<div class="f" ${f === 'address' ? 'style="grid-column:1/-1"' : ''}><label>${l}${p.edited_fields.includes(f) ? ' ✎' : ''}</label>${f === 'address' ? `<textarea data-pf="${f}" rows="2" ${ed ? '' : 'disabled'}>${esc(p[f] || '')}</textarea>` : `<input data-pf="${f}" value="${esc(p[f] || '')}" ${ed ? '' : 'disabled'}>`}</div>`).join('')}</div>
+    ${p.emails.length > 1 ? `<p class="small muted">All emails seen: ${esc(p.emails.join(', '))}</p>` : ''}
+    ${(p.products || []).length ? `<h3>Requirement</h3><table class="small"><tr><th>Item</th><th>Grade</th><th>Size</th><th class="n">Qty</th></tr>${p.products.map(x => `<tr><td>${esc(x.item)}</td><td>${esc(x.grade || '')}</td><td>${esc(x.size || '')}</td><td class="n">${esc([x.qty, x.unit].filter(Boolean).join(' '))}</td></tr>`).join('')}</table>` : ''}
+    <h3>Mails</h3><div class="tw" style="max-height:300px">${mailList(mails)}</div>
+    <div class="err" id="pErr"></div>
+    <div class="acts">${ed && p.sap_status !== 'existing' ? (p.lead_id ? `<a class="btn sec" href="#/leads?id=${p.lead_id}">Open lead</a>` : '<button class="btn sec" id="pLead">Create lead</button>') : ''}
+      ${ed && p.sap_status !== 'existing' ? '<button class="btn sec" id="pKyc">Send ledger form</button>' : ''}
+      ${p.mobile ? `<a class="btn sec" target="_blank" rel="noopener" href="${esc(waLink(p.mobile, `Dear ${p.contact || 'Sir/Madam'}, thank you for your mail to Bharat Steel (Chennai) Pvt. Ltd.`))}">💬 WhatsApp</a>` : ''}
+      <span class="sp"></span><button class="btn sec" onclick="closeModal()">Close</button>${ed ? '<button class="btn" id="pSave">Save</button>' : ''}</div>`, 'wide');
+  if (!ed) return;
+  loadCustomers().then(all => { if ($('#pCodes')) $('#pCodes').innerHTML = all.map(c => `<option value="${esc(c.card_code)}">${esc(c.name)}</option>`).join(''); });
+  const fields = () => Object.fromEntries($$('[data-pf]').map(i => [i.dataset.pf, i.value]));
+  const save = async sap => { try { await api('/api/crm', { action: 'mail_party_save', id, fields: fields(), sap }); toast('Saved'); closeModal(); done(); } catch (e) { $('#pErr').textContent = e.message; } };
+  $('#pSave').onclick = () => save();
+  $('#pLink').onclick = () => { if ($('#pCode').value.trim()) save($('#pCode').value.trim()); };
+  $$('[data-sap]').forEach(b => b.onclick = () => save(b.dataset.sap));
+  if ($('#pLead')) $('#pLead').onclick = async () => { try { await api('/api/crm', { action: 'mail_party_save', id, fields: fields() }); const r = await api('/api/crm', { action: 'mail_party_lead', id }); toast('Lead created'); closeModal(); location.hash = '#/leads?id=' + r.id; } catch (e) { $('#pErr').textContent = e.message; } };
+  if ($('#pKyc')) $('#pKyc').onclick = () => { const f = fields(); inviteKyc({ company: f.company, contact_person: f.contact, phone: f.mobile || f.phone, email: f.email, lead_id: p.lead_id || undefined }); };
+}
+
 /* ================================================================= CUSTOMER 360 */
 const ACT_IC = { call: '📞', visit: '🚗', whatsapp: '💬', email: '✉️', meeting: '🤝', complaint: '⚠️', note: '📝' };
 const ACT_L = { call: 'Call', visit: 'Visit', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Meeting', complaint: 'Complaint', note: 'Note' };
@@ -576,7 +694,7 @@ async function viewCustomer(code) {
       ${(() => { const mm = Object.fromEntries(L.monthly.map(x => [x.M, x])); return barChart(last13().map(k => ({ label: ym(k), value: mm[k]?.Sales || 0, tip: `<b>${ym(k)}</b><br>${inr(mm[k]?.Sales || 0)}<br>${mt(mm[k]?.Qty || 0)}` })), { h: 180 }); })()}</div>
       <div class="card"><h2>Outstanding ageing <small>${inrShort(L.aging.buckets.total)} open</small></h2>${stackBar(agingParts(L.aging.buckets))}
       ${d.related.length ? `<h2 style="margin-top:20px">Other ledgers, same PAN</h2>${d.related.map(r => `<div><a href="#/c/${encodeURIComponent(r.card_code)}">${esc(r.name)}</a> <span class="small muted">${esc(r.card_code)} · ${esc(r.state || '')}</span></div>`).join('')}` : ''}</div></div>` : ''}
-    <div class="card"><div class="tabs" id="ctabs">${[['activity', `Activity (${d.activities.length})`], ['invoices', 'Invoices'], ['orders', 'Open orders'], ['payments', 'Payments'], ['aging', 'Open invoices'], ['feedback', `Feedback (${d.feedback.length})`], ['kyc', `Ledger form (${d.kyc.length})`], ['details', 'Addresses & contacts']].map(([k, l]) => `<button data-t="${k}" class="${C360tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="cbody"></div></div>`;
+    <div class="card"><div class="tabs" id="ctabs">${[['activity', `Activity (${d.activities.length})`], ['invoices', 'Invoices'], ['orders', 'Open orders'], ['payments', 'Payments'], ['aging', 'Open invoices'], ['feedback', `Feedback (${d.feedback.length})`], ['kyc', `Ledger form (${d.kyc.length})`], ['mails', `Mails (${(d.mails || []).length})`], ['details', 'Addresses & contacts']].map(([k, l]) => `<button data-t="${k}" class="${C360tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="cbody"></div></div>`;
   const body = {
     activity: () => timeline(d.activities, () => viewCustomer(code)) + (d.leads.length ? `<h2 style="margin-top:16px">Leads</h2>${d.leads.map(l => `<div>${esc(l.company)} · <span class="chip">${esc(l.stage)}</span> ${esc(l.product || '')}</div>`).join('')}` : ''),
     invoices: () => !L ? needLive() : `<table><tr><th>Invoice</th><th>Date</th><th>Due</th><th class="n">Qty</th><th class="n">Total</th><th class="n">Paid</th><th>Status</th><th>PO / Ref</th><th></th></tr>
@@ -593,6 +711,7 @@ async function viewCustomer(code) {
       ${d.feedback.map(f => `<tr class="click" data-fb="${f.id}"><td class="nowrap">${fdate(f.created_at)}</td><td>${esc(f.invoice_no || '—')}</td><td class="n b">${num(f.score).toFixed(2)}</td><td>${esc(f.comment || '')}</td><td>${fbStatusChip(f.status)}</td><td>${discChip(f.discount)}</td></tr>`).join('')}</table>` : '<div class="empty">No feedback from this customer yet. Use “Send feedback link”.</div>',
     kyc: () => d.kyc.length ? `<table><tr><th>Ref</th><th>Status</th><th>Company (as filled)</th><th>GSTIN</th><th>Segment</th><th>Submitted</th></tr>
       ${d.kyc.map(k => `<tr class="click" data-go="#/kyc/${k.id}"><td>${esc(k.ref || '#' + k.id)}</td><td>${kycChip(k.status)}</td><td>${esc(k.company || '')}</td><td>${esc(k.gstin || '')}</td><td>${esc(k.segment || '')}</td><td>${fdate(k.submitted_at)}</td></tr>`).join('')}</table>` : '<div class="empty">No ledger form linked to this customer.</div>',
+    mails: () => mailList(d.mails || []),
     details: () => `<div class="row"><div>${L ? L.addresses.map(a => `<div style="margin-bottom:14px"><div class="b">${a.Type === 'B' ? 'Bill to' : 'Ship to'} · ${esc(a.Name)}</div><div>${esc([a.Building, a.Street, a.Block].filter(Boolean).join(', '))}</div><div>${esc([a.City, a.County, a.ZipCode].filter(Boolean).join(', '))}</div><div>${esc(a.State || '')}</div>${a.GSTIN ? `<div class="small muted">GSTIN ${esc(a.GSTIN)}</div>` : ''}</div>`).join('') || '<div class="muted">No addresses in SAP</div>' : needLive()}</div>
       <div>${L ? `<table><tr><th>Contact</th><th>Position</th><th>Mobile</th><th>Email</th></tr>${L.contacts.map(p => `<tr><td>${esc(p.Name)}</td><td>${esc(p.Position || '')}</td><td>${p.Mobile ? `<a href="tel:${esc(p.Mobile)}">${esc(p.Mobile)}</a>` : ''}</td><td>${esc(p.Email || '')}</td></tr>`).join('')}</table>` : ''}
       ${p.notes ? `<h2 style="margin-top:16px">Notes</h2><div style="white-space:pre-line">${esc(p.notes)}</div>` : ''}

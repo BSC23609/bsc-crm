@@ -58,5 +58,13 @@
         }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/cron.js": {
+      "maxDuration": 300
+    },
+    "api/crm.js": {
+      "maxDuration": 120
+    }
+  }
 }

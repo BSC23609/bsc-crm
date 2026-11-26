@@ -94,7 +94,10 @@ export default route(async (req, res) => {
     const leads = await sql`SELECT id, company, stage, product, est_mt, updated_at FROM crm_leads WHERE card_code = ${code} ORDER BY id DESC`;
     // Other SAP ledgers of the same company (same PAN, different GSTIN/state) — helps spot duplicates and branches.
     const related = cached?.pan ? await sql`SELECT card_code, name, gstin, state FROM crm_customers WHERE pan = ${cached.pan} AND card_code <> ${code}` : [];
-    return send(res, 200, { cached, live, sap, profile: profile || null, kyc, feedback, activities, leads, related });
+    const mails = await sql`SELECT m.id, m.received_at, m.from_email, m.from_name, m.subject, m.category, m.party_id, m.attachments,
+        m.extracted->>'summary' AS summary, m.extracted->>'action_needed' AS action_needed, m.extracted->'products' AS products
+      FROM crm_mail m WHERE m.card_code = ${code} ORDER BY m.received_at DESC LIMIT 100`;
+    return send(res, 200, { cached, live, sap, profile: profile || null, kyc, feedback, activities, leads, related, mails });
   }
 
   const rows = await sql`
