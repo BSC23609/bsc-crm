@@ -296,7 +296,10 @@ export default route(async (req, res) => {
       pre = { company: pre.company || c.name, phone: pre.phone || phoneDigits(c.phone), email: pre.email || c.email || '', contact_person: pre.contact_person || c.data?.CntctPrsn || '',
               gstin: c.gstin || '', bill_state: c.state || '', _card_code: c.card_code };
     }
-    if (!pre.company) return send(res, 400, { error: 'Enter the company name' });
+    const missing = [['company', 'company'], ['contact_person', 'contact person'], ['phone', 'mobile'], ['email', 'email']].filter(([k]) => !pre[k]).map(x => x[1]);
+    if (missing.length) return send(res, 400, { error: 'Fill in the ' + missing.join(', ') });
+    if (pre.phone.length !== 10) return send(res, 400, { error: 'Enter a 10-digit mobile number' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(pre.email)) return send(res, 400, { error: 'Check the email address' });
     const token = randomToken(18);
     const [r] = await sql`INSERT INTO crm_kyc (status, token, company, card_code, data, source, invited_by, lead_ref)
       VALUES ('invited', ${token}, ${pre.company}, ${card}, ${JSON.stringify(pre)}::jsonb, 'invite', ${me.email}, ${b.lead_id ? Number(b.lead_id) : null}) RETURNING id`;

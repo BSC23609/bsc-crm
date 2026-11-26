@@ -728,7 +728,7 @@ async function viewCustomer(code) {
   show(C360tab);
   if ($('#aLog')) $('#aLog').onclick = () => activityModal({ card_code: code }, () => { C360tab = 'activity'; viewCustomer(code); });
   $('#aFb').onclick = () => sendFeedback(phone, L?.invoices?.[0]?.InvoiceNo);
-  if ($('#aKyc')) $('#aKyc').onclick = () => inviteKyc({ card_code: code, company: m.CardName || c.name, phone });
+  if ($('#aKyc')) $('#aKyc').onclick = () => inviteKyc({ card_code: code, company: m.CardName || c.name, phone, email: String(m.E_Mail || c.email || '').split(/[;,\s]+/)[0], contact_person: m.CntctPrsn || '' });
   if ($('#aProf')) $('#aProf').onclick = () => profileModal(code, p, () => viewCustomer(code));
 }
 const needLive = () => '<div class="empty">No SAP data for this customer yet.</div>';
@@ -986,15 +986,18 @@ const sendChecks = () => `<div class="f"><label>Send the link to the customer</l
   <label style="display:block;font-weight:500;color:var(--ink);margin:4px 0"><input type="checkbox" id="iSW" ${S.meta.whatsappReady ? 'checked' : 'disabled'}> By WhatsApp (WATI)${S.meta.whatsappReady ? '' : ' <span class="muted small">— WhatsApp not set up yet</span>'}</label></div>`;
 function inviteKyc(pre) {
   modal(`<h2>Send ledger form</h2><p class="small muted" style="margin-top:-8px">Sends the ledger form link and QR code to the customer. When they submit it with this mobile, email or GSTIN, the form is matched to this request${pre.card_code || pre.lead_id ? ' (and to the SAP customer / lead)' : ''}.</p>
-    <div class="fg"><div class="f"><label>Company *</label><input id="iC" value="${esc(pre.company || '')}"></div><div class="f"><label>Contact person</label><input id="iP" value="${esc(pre.contact_person || '')}"></div>
-    <div class="f"><label>Mobile (WhatsApp)</label><input id="iM" value="${esc(pre.phone || '')}"></div><div class="f"><label>Email</label><input id="iE" type="email" value="${esc(pre.email || '')}"></div></div>
+    <div class="fg"><div class="f"><label>Company *</label><input id="iC" value="${esc(pre.company || '')}"></div><div class="f"><label>Contact person *</label><input id="iP" value="${esc(pre.contact_person || '')}"></div>
+    <div class="f"><label>Mobile (WhatsApp) *</label><input id="iM" inputmode="tel" placeholder="10-digit mobile" value="${esc(pre.phone || '')}"></div><div class="f"><label>Email *</label><input id="iE" type="email" value="${esc(pre.email || '')}"></div></div>
     ${pre.card_code ? `<div class="banner info">For SAP customer ${esc(pre.card_code)}.</div>` : ''}
     ${sendChecks()}
     <div class="err" id="iErr"></div><div id="iOut"></div><div class="acts"><button class="btn sec" onclick="closeModal()">Close</button><button class="btn" id="iGo">Send</button></div>`);
   $('#iGo').onclick = async () => {
     const email = $('#iE').value.trim(), phone = $('#iM').value.trim(), se = $('#iSE').checked, sw = $('#iSW').checked;
-    if (se && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { $('#iErr').textContent = 'Check the email address'; return; }
-    if (se && !email && sw && !phone) { $('#iErr').textContent = 'Enter an email or a mobile number to send the link to'; return; }
+    const miss = [['#iC', 'company'], ['#iP', 'contact person'], ['#iM', 'mobile'], ['#iE', 'email']].filter(([id]) => !$(id).value.trim());
+    $$('#iC,#iP,#iM,#iE').forEach(i => i.style.borderColor = miss.some(([id]) => id === '#' + i.id) ? 'var(--bad)' : '');
+    if (miss.length) { $('#iErr').textContent = 'Fill in the ' + miss.map(m => m[1]).join(', '); return; }
+    if (phone.replace(/\D/g, '').replace(/^(91|0)(?=\d{10}$)/, '').length !== 10) { $('#iErr').textContent = 'Enter a 10-digit mobile number'; $('#iM').style.borderColor = 'var(--bad)'; return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { $('#iErr').textContent = 'Check the email address'; $('#iE').style.borderColor = 'var(--bad)'; return; }
     $('#iGo').disabled = true; $('#iGo').textContent = 'Sending…'; $('#iErr').textContent = '';
     try {
       const r = await api('/api/kyc', { action: 'invite', company: $('#iC').value, contact_person: $('#iP').value, phone, email, card_code: pre.card_code, lead_id: pre.lead_id,
