@@ -93,7 +93,14 @@ WATI: template **bsc_ledger_form_8** (category **Utility**):
 
 The CRM sends `name` (contact person) and `company`.
 
-## Notes
+### 6. Staff sign-in
+
+- Staff sign in with their **email, employee code (e.g. BSC/017) or mobile**. Admin → Users → **Import staff** takes rows pasted
+  from Excel (Emp No · Name · Designation · Dept · Mobile [· Email · Role]); Dept "Management" becomes Admin, others Sales.
+- New and reset accounts get the common starting password (`Bsg@1234`, change with `COMMON_PASSWORD`) and must choose their own at first sign-in.
+- **Forgot password?** on the sign-in page sends a 6-digit code to the account's mobile by WhatsApp (WATI template
+  `otp_password2`, `{{1}}` = code; change with `WATI_OTP_TEMPLATE`). Valid 10 minutes, 5 tries, one code per minute.
+
 
 - Feedback Q3 in the current Microsoft Form shows "Fair" twice; the CRM uses Excellent / Very good / Good / Fair / Poor.
 - Scores: first option = 5 … last = 1. CSAT = share of answers in the top two options.

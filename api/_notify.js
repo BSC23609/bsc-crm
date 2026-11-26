@@ -105,3 +105,24 @@ export async function qrPng(url, size = 600) {
   const at = v => Math.round((size - v) / 2);
   return sharp(qr).composite([{ input: plate, left: at(badge), top: at(badge) }, { input: logo, left: at(mark), top: at(mark) }]).png().toBuffer();
 }
+
+// Password-reset code by WhatsApp: WATI template otp_password2 (the one the group portal uses), {{1}} = the code.
+export async function sendOtpWhatsApp(phone, code) {
+  if (!whatsappReady()) return { ok: false, message: 'WhatsApp is not set up' };
+  const to = waNumber(phone);
+  if (!to) return { ok: false, message: 'No valid mobile number on this account' };
+  const token = env('WATI_TOKEN');
+  try {
+    const r = await fetch(`${watiBase()}/api/v1/sendTemplateMessage?whatsappNumber=${to}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; BSC-CRM/1.0)',
+                 Authorization: /^bearer /i.test(token) ? token : `Bearer ${token}` },
+      body: JSON.stringify({ template_name: env('WATI_OTP_TEMPLATE', 'otp_password2'), broadcast_name: `crm_reset_${Date.now()}`, parameters: [{ name: '1', value: code }] }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const text = await r.text(); let d = {}; try { d = JSON.parse(text); } catch { /* not json */ }
+    if (!r.ok || d.result === false || d.result === 'false' || d.validWhatsAppNumber === false)
+      return { ok: false, message: 'Could not send the WhatsApp code: ' + (d.info || d.message || `WATI HTTP ${r.status}`) };
+    return { ok: true };
+  } catch (e) { return { ok: false, message: 'Could not send the WhatsApp code: ' + e.message }; }
+}

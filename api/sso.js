@@ -40,11 +40,12 @@ export default route(async (req, res) => {
     return page(res, 401, e.expired ? 'That sign-in link expired. Open the app again from the group portal.'
                                     : 'Group sign-in could not be verified.');
   }
-  const email = [c.email, c.sub].map(v => String(v || '').trim().toLowerCase()).find(v => v.includes('@'));
-  if (!email) return page(res, 403, 'Your group account has no email, which Customer CRM signs in with. Ask an admin to add it.');
+  const email = [c.email, c.sub].map(v => String(v || '').trim().toLowerCase()).find(v => v.includes('@')) || null;
+  const emp = String(c.emp_no || c.sub || '').trim().toUpperCase();
   const sql = getSql();
-  let u = (await sql`SELECT id, active FROM crm_users WHERE lower(email) = ${email}`)[0];
+  let u = (await sql`SELECT id, active FROM crm_users WHERE (${!!email} AND lower(email) = ${email || ''}) OR (${!!emp && !emp.includes('@')} AND upper(emp_code) = ${emp}) ORDER BY active DESC LIMIT 1`)[0];
   if (!u) {
+    if (!email) return page(res, 403, 'You do not have a Customer CRM account yet. Ask an admin to add you.');
     // First visit from the hub, which has already checked this person may open Customer CRM:
     // create the account as a sales user. An admin can change the role under Users.
     const pw = hashPassword(crypto.randomBytes(24).toString('hex'));

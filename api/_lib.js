@@ -70,6 +70,18 @@ export function ensureSchema() {
       active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`;
+    // Staff sign in with email, employee code (BSC/017) or mobile; password reset by WhatsApp code.
+    await sql`ALTER TABLE crm_users ALTER COLUMN email DROP NOT NULL`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS emp_code TEXT`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS mobile TEXT`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS designation TEXT`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS dept TEXT`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS must_change BOOLEAN NOT NULL DEFAULT false`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS reset_hash TEXT`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS reset_tries INT NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE crm_users ADD COLUMN IF NOT EXISTS reset_sent_at TIMESTAMPTZ`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS crm_users_emp ON crm_users (upper(emp_code)) WHERE emp_code IS NOT NULL`;
     await sql`CREATE TABLE IF NOT EXISTS crm_config (id INT PRIMARY KEY DEFAULT 1, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by TEXT)`;
     // Customer master from SAP, pushed every 15 minutes by the scheduled task on the SAP server (see /api/sap-push).
     await sql`CREATE TABLE IF NOT EXISTS crm_customers (
@@ -290,8 +302,26 @@ export function clearSession(req, res) {
 export async function currentUser(req) {
   const p = verify(cookies(req)[COOKIE]);
   if (!p) return null;
-  const rows = await getSql()`SELECT id, email, name, role, slp_code FROM crm_users WHERE id = ${p.uid} AND active = true`;
+  const rows = await getSql()`SELECT id, email, name, role, slp_code, emp_code, must_change FROM crm_users WHERE id = ${p.uid} AND active = true`;
   return rows[0] || null;
+}
+// The common starting password for new and imported staff (they must change it at first sign-in).
+export const commonPassword = () => String(process.env.COMMON_PASSWORD || 'Bsg@1234');
+export function passwordProblem(pw) {
+  pw = String(pw || '');
+  if (pw.length < 8) return 'Password must be at least 8 characters';
+  if (/^\d+$/.test(pw) || /^[a-z]+$/i.test(pw)) return 'Use a mix of letters and numbers';
+  if (pw === commonPassword()) return 'Choose your own password, not the common starting one';
+  return null;
+}
+// Find a staff account by email, employee code or mobile number.
+export async function findUser(id) {
+  const v = String(id || '').trim();
+  if (!v) return null;
+  const digits = v.replace(/\D/g, '').replace(/^(91|0)(?=\d{10}$)/, '');
+  const [u] = await getSql()`SELECT * FROM crm_users WHERE lower(email) = ${v.toLowerCase()} OR upper(emp_code) = ${v.toUpperCase()}
+                             OR (${digits.length === 10} AND mobile = ${digits}) ORDER BY active DESC LIMIT 1`;
+  return u || null;
 }
 export const canEdit = u => u && (u.role === 'admin' || u.role === 'sales');
 export const isAdmin = u => u && u.role === 'admin';

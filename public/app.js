@@ -188,24 +188,78 @@ const kycText = (url, company) => `Dear ${company || 'Customer'},\nTo open / upd
 /* ---------------- auth ---------------- */
 function showLogin(msg) {
   $('#shell').classList.add('hidden'); const L = $('#login'); L.classList.remove('hidden');
-  L.innerHTML = `<div class="loginbox"><img src="/img/bsc-logo.png" alt="Bharat Steel"><h1>Customer CRM</h1><p class="muted" style="margin:0 0 18px">Sign in with your work email.</p>
-    <form id="lf"><div class="f"><label>Email</label><input name="email" type="email" autocomplete="username" required></div>
+  L.innerHTML = `<div class="loginbox"><img src="/img/bsc-logo.png" alt="Bharat Steel"><h1>Customer CRM</h1><p class="muted" style="margin:0 0 18px">Sign in with your email, employee code or mobile number.</p>
+    <form id="lf"><div class="f"><label>Email, employee code or mobile</label><input name="email" autocomplete="username" required placeholder="e.g. BSC/017"></div>
     <div class="f"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
     <div class="err" id="lerr">${esc(msg || '')}</div><button class="btn" style="width:100%;justify-content:center;margin-top:8px">Sign in</button></form>
+    <p style="margin:14px 0 0;text-align:center"><a href="#" id="forgot">Forgot password?</a></p>
     <p class="small muted" style="margin-top:16px">Or open the CRM from the <a href="${esc(S.hub || 'https://app.thebharatsteelgroup.com')}">Bharat Steel Group portal</a> to sign in automatically.</p></div>`;
   $('#lf').onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
-    try { const d = await api('/api/auth', { action: 'login', email: f.get('email'), password: f.get('password') }); S.me = d.user; start(); }
+    try { const d = await api('/api/auth', { action: 'login', email: f.get('email'), password: f.get('password') }); S.me = d.user; d.user.must_change ? showChange(f.get('password')) : start(); }
     catch (err) { $('#lerr').textContent = err.message; }
+  };
+  $('#forgot').onclick = e => { e.preventDefault(); showForgot($('#lf [name=email]').value); };
+}
+// Forgot password: code by WhatsApp, then a new password
+function showForgot(id) {
+  const L = $('#login');
+  L.innerHTML = `<div class="loginbox"><img src="/img/bsc-logo.png" alt="Bharat Steel"><h1>Reset password</h1><p class="muted" style="margin:0 0 18px">We'll send a 6-digit code to the WhatsApp number on your account.</p>
+    <div id="fs1"><div class="f"><label>Email, employee code or mobile</label><input id="fId" value="${esc(id || '')}" placeholder="e.g. BSC/017"></div>
+      <div class="err" id="ferr"></div><button class="btn" id="fSend" style="width:100%;justify-content:center;margin-top:8px">Send code on WhatsApp</button></div>
+    <div id="fs2" class="hidden"><div class="banner ok" id="fTo"></div>
+      <div class="f"><label>6-digit code</label><input id="fCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></div>
+      <div class="f"><label>New password</label><input id="fP1" type="password" autocomplete="new-password"></div>
+      <div class="f"><label>Repeat new password</label><input id="fP2" type="password" autocomplete="new-password"></div>
+      <div class="err" id="ferr2"></div><button class="btn" id="fSet" style="width:100%;justify-content:center;margin-top:8px">Set password &amp; sign in</button>
+      <p class="small" style="text-align:center"><a href="#" id="fAgain">Send the code again</a></p></div>
+    <p style="margin:14px 0 0;text-align:center"><a href="#" id="fBack">Back to sign in</a></p></div>`;
+  const send = async () => {
+    $('#ferr').textContent = ''; $('#fSend').disabled = true;
+    try { const r = await api('/api/auth', { action: 'forgot', id: $('#fId').value }); $('#fs1').classList.add('hidden'); $('#fs2').classList.remove('hidden'); $('#fTo').textContent = `Code sent on WhatsApp to ${r.to}. It works for 10 minutes.`; $('#fCode').focus(); }
+    catch (e) { ($('#fs2').classList.contains('hidden') ? $('#ferr') : $('#ferr2')).textContent = e.message; } finally { $('#fSend').disabled = false; }
+  };
+  $('#fSend').onclick = send;
+  $('#fAgain').onclick = e => { e.preventDefault(); send(); };
+  $('#fBack').onclick = e => { e.preventDefault(); showLogin(); };
+  $('#fSet').onclick = async () => {
+    if ($('#fP1').value !== $('#fP2').value) { $('#ferr2').textContent = 'The two passwords do not match'; return; }
+    try { const d = await api('/api/auth', { action: 'reset', id: $('#fId').value, code: $('#fCode').value, password: $('#fP1').value }); S.me = d.user; start(); }
+    catch (e) { $('#ferr2').textContent = e.message; }
+  };
+}
+// First sign-in with the common starting password: choose your own
+function showChange(current) {
+  $('#shell').classList.add('hidden'); const L = $('#login'); L.classList.remove('hidden');
+  L.innerHTML = `<div class="loginbox"><img src="/img/bsc-logo.png" alt="Bharat Steel"><h1>Choose your password</h1><p class="muted" style="margin:0 0 18px">Welcome${S.me?.name ? ', ' + esc(S.me.name.split(' ')[0]) : ''}. Please set your own password to continue.</p>
+    ${current ? '' : '<div class="f"><label>Current password</label><input id="cOld" type="password" autocomplete="current-password"></div>'}
+    <div class="f"><label>New password</label><input id="cP1" type="password" autocomplete="new-password"></div>
+    <div class="f"><label>Repeat new password</label><input id="cP2" type="password" autocomplete="new-password"></div>
+    <p class="small muted">At least 8 characters, with letters and numbers.</p>
+    <div class="err" id="cerr"></div><button class="btn" id="cGo" style="width:100%;justify-content:center;margin-top:8px">Save &amp; continue</button></div>`;
+  $('#cGo').onclick = async () => {
+    if ($('#cP1').value !== $('#cP2').value) { $('#cerr').textContent = 'The two passwords do not match'; return; }
+    try { await api('/api/auth', { action: 'change_password', current: current || $('#cOld').value, next: $('#cP1').value }); S.me.must_change = false; start(); }
+    catch (e) { $('#cerr').textContent = e.message; }
   };
 }
 async function start() {
   $('#login').classList.add('hidden'); $('#shell').classList.remove('hidden');
-  $('#who').textContent = `${S.me.name || S.me.email} · ${S.me.role}`;
+  $('#who').innerHTML = `${esc(S.me.name || S.me.email || S.me.emp_code)} · ${esc(S.me.role)} · <a href="#" id="chpw" style="color:inherit">Change password</a>`;
+  $('#chpw').onclick = e => { e.preventDefault(); changePwModal(); };
   $('#navAdmin').classList.toggle('hidden', !isAdmin());
   S.meta = await api('/api/crm', { action: 'meta' });
   route();
   refreshBadges();
+}
+function changePwModal() {
+  modal(`<h2>Change password</h2><div class="f"><label>Current password</label><input id="mOld" type="password"></div>
+    <div class="f"><label>New password</label><input id="mP1" type="password"></div><div class="f"><label>Repeat new password</label><input id="mP2" type="password"></div>
+    <div class="err" id="mErr"></div><div class="acts"><button class="btn sec" onclick="closeModal()">Cancel</button><button class="btn" id="mGo">Save</button></div>`);
+  $('#mGo').onclick = async () => {
+    if ($('#mP1').value !== $('#mP2').value) { $('#mErr').textContent = 'The two passwords do not match'; return; }
+    try { await api('/api/auth', { action: 'change_password', current: $('#mOld').value, next: $('#mP1').value }); closeModal(); toast('Password changed'); } catch (e) { $('#mErr').textContent = e.message; }
+  };
 }
 $('#logout').onclick = async () => { await api('/api/auth', { action: 'logout' }); S.me = null; showLogin(); };
 async function refreshBadges() {
@@ -881,24 +935,44 @@ async function viewAdmin() {
   $('#main').innerHTML = `<h1 class="pg">Admin</h1><div class="tabs">${[['users', 'Users'], ['settings', 'Settings'], ['log', 'Activity log']].map(([k, l]) => `<button data-ad="${k}" class="${ADtab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="adb"></div>`;
   $$('[data-ad]').forEach(b => b.onclick = () => { ADtab = b.dataset.ad; viewAdmin(); });
   if (ADtab === 'users') {
-    $('#adb').innerHTML = `<div class="card"><h2>Users <span class="sp"></span><button class="btn sm" id="uNew">+ Add user</button></h2>
-      <p class="small muted">People who open the CRM from the Bharat Steel Group portal get an account automatically (Sales role). Link a salesperson to their SAP sales employee so “My customers” works.</p>
-      <table><tr><th>Name</th><th>Email</th><th>Role</th><th>SAP sales employee</th><th>Active</th><th></th></tr>${u.users.map(x => `<tr><td><input data-u="${x.id}" data-k="name" value="${esc(x.name)}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px"></td><td>${esc(x.email)}</td>
+    const inp = (x, k, v, w) => `<input data-u="${x.id}" data-k="${k}" value="${esc(v || '')}" style="width:${w};border:1px solid var(--line);border-radius:6px;padding:5px">`;
+    $('#adb').innerHTML = `<div class="card"><h2>Users <span class="sp"></span><button class="btn sm sec" id="uImp">Import staff (paste from Excel)</button><button class="btn sm" id="uNew">+ Add user</button></h2>
+      <p class="small muted">Staff sign in with their <b>email, employee code or mobile</b>. New and reset accounts get the common starting password and must choose their own at first sign-in; "Forgot password" sends a code to the mobile by WhatsApp. People who open the CRM from the group portal are signed in automatically.</p>
+      <div class="tw"><table><tr><th>Emp No</th><th>Name</th><th>Designation / Dept</th><th>Mobile (WhatsApp)</th><th>Email</th><th>Role</th><th>SAP sales employee</th><th>Active</th><th></th></tr>${u.users.map(x => `<tr>
+        <td class="nowrap b">${esc(x.emp_code || '—')}</td><td>${inp(x, 'name', x.name, '170px')}</td><td class="small">${esc(x.designation || '')}<div class="muted">${esc(x.dept || '')}</div></td>
+        <td>${inp(x, 'mobile', x.mobile, '120px')}</td><td class="small">${esc(x.email || '—')}</td>
         <td><select data-u="${x.id}" data-k="role">${opts([['admin', 'Admin'], ['sales', 'Sales'], ['viewer', 'Viewer']], x.role, null)}</select></td><td><select data-u="${x.id}" data-k="slp_code">${opts(slpOpts, x.slp_code, '—')}</select></td>
-        <td><input type="checkbox" data-u="${x.id}" data-k="active" ${x.active ? 'checked' : ''}></td><td class="nowrap"><button class="btn sm sec" data-reset="${x.id}">Reset password</button> ${x.id !== S.me.id ? `<button class="btn sm danger" data-udel="${x.id}">Delete</button>` : ''}</td></tr>`).join('')}</table>
+        <td><input type="checkbox" data-u="${x.id}" data-k="active" ${x.active ? 'checked' : ''}>${x.must_change ? '<div class="small muted nowrap">not signed in yet</div>' : ''}</td><td class="nowrap"><button class="btn sm sec" data-reset="${x.id}">Reset password</button> ${x.id !== S.me.id ? `<button class="btn sm danger" data-udel="${x.id}">Delete</button>` : ''}</td></tr>`).join('')}</table></div>
       <p class="small muted">Roles: <b>Admin</b> everything incl. users and settings · <b>Sales</b> view everything, log activity, manage leads, review ledger forms and feedback · <b>Viewer</b> read only (bank account numbers hidden).</p></div>`;
     $$('[data-u]').forEach(el => el.onchange = async () => {
       const id = +el.dataset.u, g = k => $(`[data-u="${id}"][data-k="${k}"]`);
-      try { await api('/api/users', { action: 'update', id, name: g('name').value, role: g('role').value, slp_code: g('slp_code').value, active: g('active').checked }); toast('Saved'); } catch (e) { toast(e.message); viewAdmin(); }
+      try { await api('/api/users', { action: 'update', id, name: g('name').value, mobile: g('mobile').value, role: g('role').value, slp_code: g('slp_code').value, active: g('active').checked }); toast('Saved'); } catch (e) { toast(e.message); viewAdmin(); }
     });
-    $$('[data-reset]').forEach(b => b.onclick = async () => { if (!confirm('Set a new random password for this user?')) return; const r = await api('/api/users', { action: 'reset_password', id: +b.dataset.reset }); modal(`<h2>New password</h2><p>Share it privately: <code style="font-size:16px">${esc(r.password)}</code></p><div class="acts"><button class="btn" data-copy="${esc(r.password)}">Copy</button><button class="btn sec" onclick="closeModal()">Close</button></div>`); });
+    $$('[data-reset]').forEach(b => b.onclick = async () => { if (!confirm('Reset this user to the common starting password? They will have to choose a new one at sign-in.')) return; const r = await api('/api/users', { action: 'reset_password', id: +b.dataset.reset }); modal(`<h2>Password reset</h2><p>They can now sign in with <code style="font-size:16px">${esc(r.password)}</code> and will be asked to choose their own. Or they can use "Forgot password" for a WhatsApp code.</p><div class="acts"><button class="btn sec" onclick="closeModal()">Close</button></div>`); viewAdmin(); });
     $$('[data-udel]').forEach(b => b.onclick = async () => { if (confirm('Delete this user?')) { await api('/api/users', { action: 'delete', id: +b.dataset.udel }); viewAdmin(); } });
+    $('#uImp').onclick = () => {
+      modal(`<h2>Import staff</h2><p class="small muted">Copy the rows from Excel (with or without the header row) and paste below. Columns in this order: <b>Emp No · Name · Designation · Dept · Mobile</b>, optionally · Email · Role. Dept "Management" becomes Admin, others Sales (change later). Existing Emp Nos are updated.</p>
+        <textarea id="impT" rows="12" style="width:100%;font:12px monospace;border:1px solid var(--line);border-radius:8px;padding:8px"></textarea><div id="impP" class="small muted"></div><div class="err" id="impE"></div><div id="impO"></div>
+        <div class="acts"><button class="btn sec" id="impC">Close</button><button class="btn" id="impG">Import</button></div>`, 'wide');
+      const parse = () => $('#impT').value.split(/\r?\n/).map(l => l.split('\t').map(c => c.trim())).filter(c => c.length >= 2 && c.some(Boolean) && !/^emp\s*no$/i.test(c[0]))
+        .map(c => ({ emp_code: c[0], name: c[1], designation: c[2], dept: c[3], mobile: c[4], email: c[5], role: c[6] }));
+      $('#impT').oninput = () => { const r = parse(); $('#impP').textContent = r.length ? `${r.length} people found — first: ${r[0].emp_code} ${r[0].name}` : ''; };
+      $('#impC').onclick = () => { closeModal(); viewAdmin(); };
+      $('#impG').onclick = async () => {
+        const rows = parse(); if (!rows.length) { $('#impE').textContent = 'Paste the rows first (tab-separated, as copied from Excel)'; return; }
+        try { const r = await api('/api/users', { action: 'import', rows }); $('#impG').remove();
+          $('#impO').innerHTML = `<div class="banner ok">${r.added} added, ${r.updated} updated. Starting password: <b>${esc(r.password)}</b> (each person chooses their own at first sign-in).</div>${r.problems.length ? `<div class="banner warn">${r.problems.map(esc).join('<br>')}</div>` : ''}`; }
+        catch (e) { $('#impE').textContent = e.message; }
+      };
+    };
     $('#uNew').onclick = () => {
-      modal(`<h2>Add user</h2><div class="fg"><div class="f"><label>Name</label><input id="nN"></div><div class="f"><label>Email</label><input id="nE" type="email"></div>
+      modal(`<h2>Add user</h2><div class="fg"><div class="f"><label>Emp No</label><input id="nC" placeholder="BSC/017"></div><div class="f"><label>Name</label><input id="nN"></div>
+        <div class="f"><label>Designation</label><input id="nD"></div><div class="f"><label>Dept</label><input id="nDp"></div>
+        <div class="f"><label>Mobile (WhatsApp)</label><input id="nM" placeholder="98xxxxxxxx"></div><div class="f"><label>Email (optional)</label><input id="nE" type="email"></div>
         <div class="f"><label>Role</label><select id="nR">${opts([['sales', 'Sales'], ['admin', 'Admin'], ['viewer', 'Viewer']], 'sales', null)}</select></div><div class="f"><label>SAP sales employee</label><select id="nS">${opts(slpOpts, '', '—')}</select></div></div>
         <div class="err" id="nErr"></div><div class="acts"><button class="btn sec" onclick="closeModal()">Cancel</button><button class="btn" id="nGo">Add</button></div>`);
-      $('#nGo').onclick = async () => { try { const r = await api('/api/users', { action: 'add', name: $('#nN').value, email: $('#nE').value, role: $('#nR').value, slp_code: $('#nS').value });
-        modal(`<h2>User added</h2><p>Temporary password (share privately): <code style="font-size:16px">${esc(r.password)}</code></p><div class="acts"><button class="btn" data-copy="${esc(r.password)}">Copy</button><button class="btn sec" id="nDone">Close</button></div>`); $('#nDone').onclick = () => { closeModal(); viewAdmin(); }; }
+      $('#nGo').onclick = async () => { try { const r = await api('/api/users', { action: 'add', emp_code: $('#nC').value, name: $('#nN').value, designation: $('#nD').value, dept: $('#nDp').value, mobile: $('#nM').value, email: $('#nE').value, role: $('#nR').value, slp_code: $('#nS').value });
+        modal(`<h2>User added</h2><p>They sign in with their employee code${$('#nE').value ? ', email' : ''} or mobile and the starting password <code style="font-size:16px">${esc(r.password)}</code>, then choose their own.</p><div class="acts"><button class="btn sec" id="nDone">Close</button></div>`); $('#nDone').onclick = () => { closeModal(); viewAdmin(); }; }
         catch (e) { $('#nErr').textContent = e.message; } };
     };
   } else if (ADtab === 'settings') {
@@ -924,6 +998,6 @@ async function viewAdmin() {
 (async () => {
   try {
     const d = await api('/api/auth', { action: 'me' }); S.hub = d.hub;
-    if (d.user) { S.me = d.user; start(); } else showLogin();
+    if (d.user) { S.me = d.user; d.user.must_change ? showChange() : start(); } else showLogin();
   } catch (e) { showLogin(e.message); }
 })();
