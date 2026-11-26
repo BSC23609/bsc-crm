@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledger Creation Data Sheet · Bharat Steel (Chennai) Pvt. Ltd.</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/img/bsc-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/forms.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><div class="bar"></div><div class="in">
+    <img src="/img/bsc-logo.png" alt="Bharat Steel (Chennai) Pvt. Ltd.">
+    <div class="sub">Bharat Steel Group · Ledger data</div>
+    <h1>SAP Ledger Creation Data Sheet</h1>
+    <p>Please fill in your company, billing, bank and shipping details so we can open your customer account. It takes about 5 minutes. Keep your GST certificate and a cancelled cheque ready to upload.</p>
+    <p><span class="req">*</span> Required</p>
+  </div></div>
+  <div id="app"><div class="q">Loading…</div></div>
+  <div class="foot">Bharat Steel (Chennai) Pvt. Ltd. · <a href="https://www.bharatsteels.in" target="_blank" rel="noopener">www.bharatsteels.in</a> · Questions? <a href="https://wa.me/919500680093" target="_blank" rel="noopener">WhatsApp us</a></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const T = new URLSearchParams(location.search).get('t') || '';
+let O = null, draft = null, uploading = 0;
+const files = {};          // docType -> {id, name}
+async function api(body) {
+  const r = await fetch('/api/kyc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d.error || 'Something went wrong'); e.data = d; throw e; }
+  return d;
+}
+
+const STATE_CODES = {'01':'Jammu and Kashmir','02':'Himachal Pradesh','03':'Punjab','04':'Chandigarh','05':'Uttarakhand','06':'Haryana','07':'Delhi','08':'Rajasthan','09':'Uttar Pradesh','10':'Bihar','11':'Sikkim','12':'Arunachal Pradesh','13':'Nagaland','14':'Manipur','15':'Mizoram','16':'Tripura','17':'Meghalaya','18':'Assam','19':'West Bengal','20':'Jharkhand','21':'Odisha','22':'Chhattisgarh','23':'Madhya Pradesh','24':'Gujarat','26':'Dadra and Nagar Haveli and Daman and Diu','27':'Maharashtra','29':'Karnataka','30':'Goa','31':'Lakshadweep','32':'Kerala','33':'Tamil Nadu','34':'Puducherry','35':'Andaman and Nicobar Islands','36':'Telangana','37':'Andhra Pradesh','38':'Ladakh'};
+const GC = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function gstinProblem(g) {
+  if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(g)) return 'GSTIN must be 15 characters like 33AAACB1234C1Z5';
+  if (!STATE_CODES[g.slice(0, 2)]) return 'The first two digits are not a valid state code';
+  let s = 0; for (let i = 0; i < 14; i++) { const v = GC.indexOf(g[i]) * (i % 2 ? 2 : 1); s += Math.floor(v / 36) + v % 36; }
+  return GC[(36 - s % 36) % 36] === g[14] ? null : 'GSTIN check digit does not match — please re-check the number';
+}
+
+/* ---------- field builders ---------- */
+const req = '<span class="r">*</span>';
+const text = (k, label, o = {}) => `<div class="q" data-k="${k}"><label for="f_${k}">${esc(label)} ${o.opt ? '' : req}</label>${o.help ? `<div class="help">${o.help}</div>` : ''}
+  ${o.area ? `<textarea id="f_${k}" name="${k}" ${o.ph ? `placeholder="${esc(o.ph)}"` : ''}></textarea>`
+           : `<input type="${o.type || 'text'}" id="f_${k}" name="${k}" ${o.ph ? `placeholder="${esc(o.ph)}"` : ''} ${o.mode ? `inputmode="${o.mode}"` : ''} ${o.max ? `maxlength="${o.max}"` : ''} autocomplete="${o.ac || 'off'}">`}
+  <div class="hint" id="h_${k}"></div><div class="err" id="e_${k}"></div></div>`;
+const select = (k, label, list) => `<div class="q" data-k="${k}"><label for="f_${k}">${esc(label)} ${req}</label>
+  <select id="f_${k}" name="${k}"><option value="">Choose</option>${list.map(s => `<option>${esc(s)}</option>`).join('')}</select><div class="err" id="e_${k}"></div></div>`;
+const radios = (k, label, list, o = {}) => `<div class="q" data-k="${k}"><div class="lbl">${esc(label)} ${req}</div><div class="opts ${o.cols ? 'cols' : ''}">
+  ${list.map(s => `<label class="opt"><input type="radio" name="${k}" value="${esc(s)}">${esc(s)}</label>`).join('')}
+  ${o.other ? `<label class="opt"><input type="radio" name="${k}" value="Other">Other: <input type="text" name="${k}_other" style="padding:5px 8px" maxlength="100"></label>` : ''}
+  </div><div class="err" id="e_${k}"></div>${o.other ? `<div class="err" id="e_${k}_other"></div>` : ''}</div>`;
+const checks = (k, label, list) => `<div class="q" data-k="${k}"><div class="lbl">${esc(label)} ${req}</div><div class="help">Check all that apply.</div><div class="opts cols">
+  ${list.map(s => `<label class="opt"><input type="checkbox" name="${k}" value="${esc(s)}">${esc(s)}</label>`).join('')}
+  <label class="opt"><input type="checkbox" name="${k}" value="__other">Other: <input type="text" name="buyer_other" style="padding:5px 8px" maxlength="100"></label>
+  </div><div class="err" id="e_${k}"></div></div>`;
+const fileQ = (k, label) => `<div class="q" data-k="file_${k}"><div class="lbl">${esc(label)} ${req}</div>
+  <div class="file" id="fw_${k}"></div><div class="hint">PDF or photo, up to 15 MB.</div><div class="err" id="e_file_${k}"></div></div>`;
+
+function render() {
+  if (!O.open) { $('#app').innerHTML = `<div class="banner warn">This form is not accepting responses right now. Please contact your Bharat Steel sales representative.</div>`; return; }
+  const noStore = !O.storage.ready;
+  $('#app').innerHTML = `<form id="F" novalidate>
+    ${text('company', 'Company Name', { ac: 'organization' })}
+    ${text('company_type', 'Company Type', { ph: 'e.g. Manufacturer, Fabricator, Trader, Contractor' })}
+    <div class="grid2" style="gap:0 10px">${text('phone', 'Contact Number', { type: 'tel', mode: 'tel', max: 16, ac: 'tel' })}${text('email', 'Email Address', { type: 'email', mode: 'email', ac: 'email' })}</div>
+    ${text('contact_person', 'Contact Person Name', { opt: true, ac: 'name' })}
+    ${checks('buyer_types', 'Type of Buyer', O.buyerTypes)}
+    ${radios('segment', 'Customer Industry Segment', O.segments, { cols: true, other: true })}
+    ${radios('usage', 'Usage', O.usage)}
+
+    <div class="sec">Billing address</div>
+    ${text('bill_address', 'Billing Address', { area: true, ac: 'street-address' })}
+    <div class="grid2" style="gap:0 10px">${text('bill_pincode', 'Pincode', { mode: 'numeric', max: 6, ac: 'postal-code' })}${text('bill_district', 'District')}</div>
+    ${select('bill_state', 'State', O.states)}
+    ${text('gstin', 'GST Number', { max: 15, ph: '15-character GSTIN' })}
+    ${noStore ? '' : fileQ('gst_billing', O.docs.gst_billing)}
+    ${radios('reg_type', 'Company Registration Type', O.regTypes)}
+
+    <div class="sec">Bank details<small>For refunds in case of excess advance available with us</small></div>
+    ${text('bank_name', 'Bank Trade Name', { help: 'Account holder name as per bank records' })}
+    <div class="grid2" style="gap:0 10px">${text('bank_account', 'Bank Account Number', { mode: 'numeric', max: 20 })}${text('ifsc', 'IFSC Code', { max: 11 })}</div>
+    ${noStore ? '' : fileQ('cheque', O.docs.cheque)}
+
+    <div class="sec">Shipping address</div>
+    <div class="q"><label class="check" style="margin:0"><input type="checkbox" id="same" name="ship_same"> Shipping address is the same as billing address</label></div>
+    <div id="ship">
+      ${text('ship_trade_name', 'Trade Name')}
+      ${text('ship_address', 'Shipping Address', { area: true })}
+      <div class="grid2" style="gap:0 10px">${text('ship_pincode', 'Pincode', { mode: 'numeric', max: 6 })}${text('ship_district', 'District')}</div>
+      ${select('ship_state', 'State', O.states)}
+      ${text('ship_gstin', 'GST Number', { max: 15 })}
+      ${noStore ? '' : fileQ('gst_shipping', O.docs.gst_shipping)}
+    </div>
+    ${noStore ? '<div class="banner warn">Document upload is not available at the moment — our team will collect your GST certificate and cancelled cheque separately.</div>' : ''}
+    <div id="formErr"></div>
+    <div class="actions"><button class="btn" id="go" type="submit">Submit</button><span class="hint">Your details are shared only with Bharat Steel's accounts team.</span></div>
+  </form>`;
+  for (const k of Object.keys(O.docs)) drawFile(k);
+  bind();
+  if (O.prefill) fill(O.prefill);
+}
+
+function fill(p) {
+  for (const [k, v] of Object.entries(p)) {
+    if (k.startsWith('_') || v == null || v === '') continue;
+    const el = document.querySelector(`[name="${k}"]`);
+    if (el && el.type !== 'radio' && el.type !== 'checkbox') el.value = v;
+  }
+  if (p.gstin) onGstin('gstin');
+}
+
+/* ---------- smart helpers ---------- */
+function setHint(k, html) { const h = $('#h_' + k); if (h) h.innerHTML = html || ''; }
+function onGstin(k) {
+  const el = $('#f_' + k); el.value = el.value.toUpperCase().replace(/\s/g, '');
+  const g = el.value;
+  if (g.length < 15) { setHint(k, ''); return; }
+  const p = gstinProblem(g);
+  if (p) { setHint(k, `<span style="color:var(--bad)">${esc(p)}</span>`); return; }
+  setHint(k, `<span class="ok-line">✓ Valid GSTIN · PAN ${g.slice(2, 12)} · ${esc(STATE_CODES[g.slice(0, 2)])}</span>`);
+  const st = $('#f_' + (k === 'gstin' ? 'bill_state' : 'ship_state'));
+  if (st && !st.value) st.value = STATE_CODES[g.slice(0, 2)];
+}
+async function onPin(prefix) {
+  const v = $('#f_' + prefix + '_pincode').value.trim();
+  if (!/^[1-9][0-9]{5}$/.test(v)) return;
+  try {
+    const r = await fetch('https://api.postalpincode.in/pincode/' + v); const d = await r.json();
+    const po = d && d[0] && d[0].PostOffice && d[0].PostOffice[0]; if (!po) return;
+    const dist = $('#f_' + prefix + '_district'), st = $('#f_' + prefix + '_state');
+    if (!dist.value) dist.value = po.District;
+    const match = O.states.find(s => s.toLowerCase() === String(po.State).toLowerCase());
+    if (st && !st.value && match) st.value = match;
+  } catch (_) { /* lookup is only a convenience */ }
+}
+async function onIfsc() {
+  const el = $('#f_ifsc'); el.value = el.value.toUpperCase().replace(/\s/g, '');
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(el.value)) { setHint('ifsc', el.value.length === 11 ? '<span style="color:var(--bad)">IFSC is 11 characters like SBIN0001234</span>' : ''); return; }
+  try {
+    const r = await fetch('https://ifsc.razorpay.com/' + el.value);
+    if (!r.ok) { setHint('ifsc', '<span style="color:var(--bad)">IFSC not found — please re-check</span>'); return; }
+    const d = await r.json(); setHint('ifsc', `<span class="ok-line">✓ ${esc(d.BANK)} · ${esc(d.BRANCH)}, ${esc(d.CITY)}</span>`);
+  } catch (_) { setHint('ifsc', ''); }
+}
+function bind() {
+  $('#f_gstin').addEventListener('input', () => onGstin('gstin'));
+  $('#f_ship_gstin').addEventListener('input', () => onGstin('ship_gstin'));
+  $('#f_bill_pincode').addEventListener('input', () => onPin('bill'));
+  $('#f_ship_pincode').addEventListener('input', () => onPin('ship'));
+  $('#f_ifsc').addEventListener('input', onIfsc);
+  $('#same').addEventListener('change', e => $('#ship').classList.toggle('hidden', e.target.checked));
+  document.querySelectorAll('input[name="buyer_other"],input[name="segment_other"]').forEach(i => i.addEventListener('input', () => {
+    const box = i.closest('label').querySelector('input[type=checkbox],input[type=radio]'); if (i.value) box.checked = true;
+  }));
+  document.querySelectorAll('#F input,#F select,#F textarea').forEach(i => i.addEventListener('input', () => i.closest('.q')?.classList.remove('has-err')));
+  $('#F').addEventListener('submit', submit);
+}
+
+/* ---------- uploads ---------- */
+function drawFile(k) {
+  const w = $('#fw_' + k); if (!w) return;
+  const f = files[k];
+  w.innerHTML = f ? `<span class="done">✓ <span>${esc(f.name)}</span><button type="button" title="Remove" data-rm="${k}">×</button></span>`
+                  : `<label class="pick"><input type="file" accept="application/pdf,image/*" data-up="${k}">⬆ Add file</label><span class="prog" id="p_${k}"></span>`;
+  const inp = w.querySelector('[data-up]'); if (inp) inp.onchange = () => upload(k, inp.files[0]);
+  const rm = w.querySelector('[data-rm]'); if (rm) rm.onclick = async () => {
+    const f = files[k]; delete files[k]; drawFile(k);
+    try { await fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'delete', id: f.id, ref: draft.id, key: draft.key }) }); } catch (_) {}
+  };
+}
+// Phone photos are shrunk before upload (faster on mobile data, still readable)
+async function shrink(file) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 1.2e6) return file;
+  try {
+    const bmp = await createImageBitmap(file); const s = Math.min(1, 2200 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
+  } catch (_) { return file; }
+}
+let blobMod = null;
+async function upload(k, file) {
+  if (!file) return;
+  const p = $('#p_' + k), q = document.querySelector(`[data-k="file_${k}"]`);
+  if (file.size > 15 * 1024 * 1024) { q.classList.add('has-err'); $('#e_file_' + k).textContent = 'File is over 15 MB'; return; }
+  uploading++; $('#go').disabled = true;
+  try {
+    if (!draft) draft = await api({ action: 'draft', t: T || undefined });
+    file = await shrink(file);
+    if (!blobMod) blobMod = await import('/blob-client.js');
+    const up = O.storage.mode === 'presigned' ? blobMod.uploadPresigned : blobMod.upload;
+    const safe = (file.name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '') || 'file').slice(-100);
+    const blob = await up(`kyc/${draft.id}/${draft.key}/${k}-${safe}`, file, { access: O.storage.access, handleUploadUrl: '/api/upload',
+      onUploadProgress: e => { p.textContent = `Uploading… ${Math.round(e.percentage)}%`; } });
+    const r = await fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'register', ref: draft.id, key: draft.key, docType: k, name: file.name, size: file.size, type: file.type, url: blob.url, pathname: blob.pathname }) });
+    const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Upload failed');
+    files[k] = { id: d.id, name: file.name }; q.classList.remove('has-err'); drawFile(k);
+  } catch (e) { p.textContent = ''; q.classList.add('has-err'); $('#e_file_' + k).textContent = 'Upload failed: ' + (e.message || e) + '. Please try again.'; }
+  finally { uploading--; $('#go').disabled = uploading > 0; }
+}
+
+/* ---------- submit ---------- */
+function collect() {
+  const F = $('#F'), d = {};
+  for (const el of F.querySelectorAll('input[type=text],input[type=tel],input[type=email],textarea,select')) d[el.name] = el.value;
+  d.buyer_types = [...F.querySelectorAll('input[name=buyer_types]:checked')].map(x => x.value).filter(v => v !== '__other');
+  if (!F.querySelector('input[name=buyer_types][value=__other]').checked) d.buyer_other = '';
+  for (const k of ['segment', 'usage', 'reg_type']) d[k] = (F.querySelector(`input[name=${k}]:checked`) || {}).value || '';
+  if (d.segment !== 'Other') d.segment_other = '';
+  d.ship_same = $('#same').checked;
+  return d;
+}
+function showErrors(errors) {
+  document.querySelectorAll('.q.has-err').forEach(q => q.classList.remove('has-err'));
+  let first = null;
+  for (const [k, msg] of Object.entries(errors || {})) {
+    const e = $('#e_' + k); if (!e) continue;
+    e.textContent = msg; const q = e.closest('.q'); q.classList.add('has-err'); first = first || q;
+  }
+  if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+async function submit(ev) {
+  ev.preventDefault();
+  const d = collect(), errors = {};
+  for (const k of ['gstin', 'ship_gstin']) if (d[k] && !(k === 'ship_gstin' && d.ship_same)) { const p = gstinProblem(d[k].toUpperCase()); if (p) errors[k] = p; }
+  if (O.storage.ready) for (const k of Object.keys(O.docs)) if (!files[k] && !(k === 'gst_shipping' && d.ship_same)) errors['file_' + k] = 'Please upload this document';
+  if (Object.keys(errors).length) { showErrors(errors); return; }
+  const btn = $('#go'); btn.disabled = true; btn.textContent = 'Submitting…'; $('#formErr').innerHTML = '';
+  try {
+    const r = await api({ action: 'submit', data: d, t: T || undefined, id: draft?.id, key: draft?.key });
+    window.scrollTo(0, 0);
+    $('#app').innerHTML = `<div class="thanks"><div class="tick">✓</div><h2>Thank you!</h2>
+      <p>Your details have been sent to Bharat Steel's accounts team. We will set up your ledger and get in touch if anything else is needed.</p>
+      <div class="ref">Reference: ${esc(r.ref)}</div></div>`;
+  } catch (e) {
+    showErrors(e.data?.errors); $('#formErr').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`;
+    btn.disabled = false; btn.textContent = 'Submit';
+  }
+}
+
+(async () => {
+  try {
+    O = await api({ action: 'options', t: T || undefined });
+    if (O.done) { $('#app').innerHTML = `<div class="thanks"><div class="tick">✓</div><h2>Already received</h2><p>We already have the ledger details for ${esc(O.company || 'your company')}. Thank you!</p></div>`; return; }
+    render();
+  } catch (e) { $('#app').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Customer Feedback · Bharat Steel (Chennai) Pvt. Ltd.</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/img/bsc-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/forms.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><div class="bar"></div><div class="in">
+    <img src="/img/bsc-logo.png" alt="Bharat Steel (Chennai) Pvt. Ltd.">
+    <h1>Customer Feedback Form</h1>
+    <p>We value your feedback. This short survey takes <b>less than 1 minute</b> and helps us improve our products and services.</p>
+    <div class="promo hidden" id="promo"></div>
+    <p style="font-size:12.5px">This form does not collect your name or email address. <span class="req">*</span> Required</p>
+  </div></div>
+  <div id="app"><div class="q">Loading…</div></div>
+  <div class="foot">For deliveries call 94440 85014 · Sales: Mr. Venkatesh 72000 06787 / Mr. Dhanraj 94440 85015<br>Bharat Steel (Chennai) Pvt. Ltd. · <a href="https://www.bharatsteels.in" target="_blank" rel="noopener">www.bharatsteels.in</a></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const INV = new URLSearchParams(location.search).get('inv') || '';
+let O = null;
+async function api(body) {
+  const r = await fetch('/api/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d.error || 'Something went wrong'); e.data = d; throw e; }
+  return d;
+}
+function render() {
+  if (!O.open) { $('#app').innerHTML = `<div class="banner warn">This form is not accepting responses right now.</div>`; return; }
+  if (O.discountPerTon > 0) { $('#promo').classList.remove('hidden'); $('#promo').innerHTML = `As a token of appreciation, customers who complete this form receive an additional <b>discount of Rs.${esc(O.discountPerTon)} per ton</b> on their next purchase with us.`; }
+  $('#app').innerHTML = `<form id="F" novalidate>
+    <div class="q" data-k="invoice_no"><label for="f_inv"><span class="n">1.</span>Please enter the Invoice Number for the delivery</label>
+      <input type="text" id="f_inv" name="invoice_no" maxlength="40" value="${esc(INV)}" placeholder="Enter your answer">
+      ${O.discountPerTon > 0 ? '<div class="hint">Needed for the discount on your next purchase.</div>' : ''}</div>
+    ${O.questions.map(q => `<div class="q" data-k="${q.key}"><div class="lbl"><span class="n">${q.n}.</span>${esc(q.text)} ${q.required ? '<span class="r">*</span>' : ''}</div>
+      <div class="scale">${q.options.map(o => `<label class="opt"><input type="radio" name="${q.key}" value="${esc(o)}">${esc(o)}</label>`).join('')}</div>
+      <div class="err" id="e_${q.key}"></div></div>`).join('')}
+    <div class="q"><label for="f_c"><span class="n">9.</span>Any suggestion or comment to help us improve?</label>
+      <textarea id="f_c" name="comment" maxlength="2000" placeholder="Enter your answer"></textarea></div>
+    <div id="formErr"></div>
+    <div class="actions"><button class="btn" id="go" type="submit">Submit</button></div>
+  </form>`;
+  document.querySelectorAll('#F input[type=radio]').forEach(i => i.addEventListener('change', () => i.closest('.q').classList.remove('has-err')));
+  $('#F').addEventListener('submit', submit);
+}
+async function submit(ev) {
+  ev.preventDefault();
+  const F = $('#F'), answers = {}, errors = {};
+  for (const q of O.questions) { const c = F.querySelector(`input[name=${q.key}]:checked`); if (c) answers[q.key] = c.value; else if (q.required) errors[q.key] = 'This question is required'; }
+  document.querySelectorAll('.q.has-err').forEach(q => q.classList.remove('has-err'));
+  if (Object.keys(errors).length) {
+    let first = null;
+    for (const [k, m] of Object.entries(errors)) { $('#e_' + k).textContent = m; const q = $('#e_' + k).closest('.q'); q.classList.add('has-err'); first = first || q; }
+    first.scrollIntoView({ behavior: 'smooth', block: 'center' }); return;
+  }
+  const btn = $('#go'); btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    await api({ action: 'submit', invoice_no: $('#f_inv').value, answers, comment: $('#f_c').value });
+    window.scrollTo(0, 0);
+    $('#app').innerHTML = `<div class="thanks"><div class="tick">✓</div><h2>Thank you for your feedback!</h2>
+      <p>Your response has been recorded. ${O.discountPerTon > 0 && $('#f_inv').value.trim() ? `Your Rs.${esc(O.discountPerTon)} per ton discount will be applied on your next purchase.` : ''}</p>
+      <p class="hint">In case of any queries, please get in touch with your sales representative.</p></div>`;
+  } catch (e) { $('#formErr').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; btn.disabled = false; btn.textContent = 'Submit'; }
+}
+(async () => { try { O = await api({ action: 'options' }); render(); } catch (e) { $('#app').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; } })();
+</script>
+</body>
+</html>

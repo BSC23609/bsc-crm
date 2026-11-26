@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Customer CRM · Bharat Steel</title>
+<link rel="icon" href="/img/bsc-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="login" class="hidden"></div>
+<div id="shell" class="hidden">
+  <header>
+    <a href="#/" class="brand"><img src="/img/bsc-logo.png" alt=""><span><b>Customer CRM</b><small>Bharat Steel (Chennai) Pvt. Ltd.</small></span></a>
+    <div class="gsearch"><input id="gq" type="search" placeholder="Search customer, code, GSTIN, phone…" autocomplete="off"><div id="gres" class="gres hidden"></div></div>
+    <div class="hright"><span id="sapState" class="sapst"></span><span id="who" class="who"></span><button class="lnk" id="logout">Sign out</button></div>
+  </header>
+  <nav id="nav">
+    <a href="#/" data-r="dash">Dashboard</a>
+    <a href="#/customers" data-r="customers">Customers</a>
+    <a href="#/followups" data-r="followups">Follow-ups <span class="nb" id="nbFu"></span></a>
+    <a href="#/leads" data-r="leads">Leads</a>
+    <a href="#/kyc" data-r="kyc">Ledger forms <span class="nb" id="nbKyc"></span></a>
+    <a href="#/feedback" data-r="feedback">Feedback <span class="nb" id="nbFb"></span></a>
+    <a href="#/admin" data-r="admin" id="navAdmin" class="hidden">Admin</a>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="modalRoot"></div>
+<div id="tip" class="tip hidden"></div>
+<div id="toast" class="toast hidden"></div>
+<script src="/qrcode.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

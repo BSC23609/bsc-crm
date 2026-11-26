@@ -1,0 +1,16 @@
+{
+  "name": "bsc-crm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Customer CRM - Bharat Steel (Chennai) Pvt. Ltd. (crm.bharatsteels.in, Vercel + Neon, live SAP B1 via the SAP bridge)",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0",
+    "@vercel/blob": "^2.9.0"
+  },
+  "devDependencies": {
+    "pg": "^8.13.0"
+  },
+  "scripts": { "test": "node tests/run.js" },
+  "engines": { "node": ">=18" }
+}
