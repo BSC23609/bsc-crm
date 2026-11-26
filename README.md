@@ -80,17 +80,21 @@ Add to Vercel → bsc-crm → Environment Variables, then redeploy:
 | `WATI_BASE_URL` | same as in the other group apps |
 | `WATI_TOKEN` | same as in the other group apps |
 | `WATI_KYC_TEMPLATE` | `bsc_ledger_form` (optional, this is the default) |
-| `APP_URL` | `https://crm.bharatsteels.in` (optional; makes the links use the custom address) |
+| `APP_URL` | optional — the address put in every customer link and QR code; default `https://crm.bharatsteels.in` |
 
 Microsoft 365: *Authenticated SMTP* must be enabled for the info@ mailbox (M365 admin centre → Users → info@ → Mail → Manage email apps → tick **Authenticated SMTP**).
 
-WATI: create and get approved a template named **bsc_ledger_form** (category **Utility**), body for example:
+WATI: create and get approved a template named **bsc_ledger_form** (category **Utility**):
+
+- **Header:** Media → **Image**, URL `{{qr_image}}` (the CRM fills in the customer's own QR picture, served from
+  `https://crm.bharatsteels.in/qr/<link>.png`). For the sample image WATI asks for, use any QR PNG.
+- **Body**, for example:
 
     Dear {{1}},
     To open the customer ledger for {{2}} with Bharat Steel (Chennai) Pvt. Ltd., please fill in the Ledger Creation Data Sheet here: {{3}}
     Please keep your GST certificate and a cancelled cheque ready to upload. Thank you.
 
-({{1}} contact name, {{2}} company, {{3}} the form link.) The QR code goes in the email; on WhatsApp the customer just taps the link.
+({{1}} contact name, {{2}} company, {{3}} the form link.) If you prefer a text-only template (no image header), set `WATI_KYC_QR=0`.
 
 ## Notes
 

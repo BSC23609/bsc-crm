@@ -27,7 +27,8 @@ const daysSince = v => (v ? Math.floor((Date.parse(today()) - Date.parse(d10(v))
 const canEdit = () => S.me && (S.me.role === 'admin' || S.me.role === 'sales');
 const isAdmin = () => S.me && S.me.role === 'admin';
 const waLink = (phone, text) => { let p = String(phone || '').replace(/\D/g, ''); if (p.length === 10) p = '91' + p; return `https://wa.me/${p}?text=${encodeURIComponent(text)}`; };
-const origin = () => location.origin;
+// Public address used in every link given to customers (APP_URL, default https://crm.bharatsteels.in)
+const origin = () => (S.meta && S.meta.appUrl) || 'https://crm.bharatsteels.in';
 
 /* ---------------- api / ui helpers ---------------- */
 async function api(path, body) {

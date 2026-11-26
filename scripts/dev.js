@@ -20,6 +20,7 @@ const rewrites = Object.fromEntries((vercel.rewrites || []).map(r => [r.source, 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   let p = rewrites[url.pathname] || url.pathname;
+  if (p.startsWith('/qr/')) { req.url = '/api/files?qr=' + p.slice(4); p = '/api/files'; }
   if (p.startsWith('/api/')) {
     const name = p.slice(5).split('?')[0].replace(/[^a-z_-]/g, '');
     try {

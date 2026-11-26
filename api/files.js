@@ -2,6 +2,7 @@ import { Readable } from 'node:stream';
 import { del, get, issueSignedToken, presignUrl } from '@vercel/blob';
 import { route, send, readBody, getSql, currentUser, canEdit, query, KYC_DOCS } from './_lib.js';
 import { blobAccess } from './_blob.js';
+import { qrPng, appUrl } from './_notify.js';
 
 async function openFile(req, res) {
   const id = Number(query(req).get('id'));
@@ -26,6 +27,15 @@ async function openFile(req, res) {
 export default route(async (req, res) => {
   const sql = getSql();
   const me = await currentUser(req);
+  if (req.method === 'GET' && query(req).get('qr')) {
+    // Public QR image of a personal ledger-form link (used as the WhatsApp message picture). Only while the link is open.
+    const t = String(query(req).get('qr')).replace(/\.png$/i, '');
+    const [r] = await sql`SELECT token FROM crm_kyc WHERE token = ${t} AND status = 'invited'`;
+    if (!r) return send(res, 404, { error: 'Not found' });
+    const png = await qrPng(`${appUrl(req)}/kyc?t=${r.token}`);
+    res.statusCode = 200; res.setHeader('Content-Type', 'image/png'); res.setHeader('Content-Length', png.length);
+    res.setHeader('Cache-Control', 'public, max-age=86400'); return res.end(png);
+  }
   if (req.method === 'GET') { if (!me) return send(res, 401, { error: 'Please sign in' }); return openFile(req, res); }
   if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST only' });
   const b = await readBody(req);

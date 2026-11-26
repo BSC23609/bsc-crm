@@ -8,7 +8,8 @@ import QRCode from 'qrcode';
 const env = (k, d = '') => String(process.env[k] ?? d).trim().replace(/^['"]|['"]$/g, '').trim();
 export const emailReady = () => !!(env('SMTP_HOST') && env('SMTP_USER') && env('SMTP_PASS'));
 export const whatsappReady = () => !!(watiBase() && env('WATI_TOKEN'));
-export const appUrl = req => env('APP_URL') || `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
+// Links sent to customers always use the official address, whichever address staff opened the CRM on.
+export const appUrl = () => (env('APP_URL') || 'https://crm.bharatsteels.in').replace(/\/+$/, '');
 
 function watiBase() {
   let b = env('WATI_BASE_URL').replace(/\/+$/, '');
@@ -64,7 +65,9 @@ export async function sendKycEmail({ to, name, company, url, logoUrl }) {
 }
 
 // WhatsApp template (must be approved in WATI first). Body variables: {{1}} name, {{2}} company, {{3}} form link.
-export async function sendKycWhatsApp({ phone, name, company, url }) {
+// Image header: the template's header is Media → Image with the URL set to the variable {{qr_image}} (name changeable with
+// WATI_KYC_QR_PARAM); we pass the QR picture's public address in it. Set WATI_KYC_QR=0 for a text-only template.
+export async function sendKycWhatsApp({ phone, name, company, url, qrUrl }) {
   if (!whatsappReady()) return { ok: false, message: 'WhatsApp is not set up (WATI_* settings)' };
   const to = waNumber(phone);
   if (!to) return { ok: false, message: 'No valid mobile number' };
@@ -75,7 +78,8 @@ export async function sendKycWhatsApp({ phone, name, company, url }) {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; BSC-CRM/1.0)',
                  Authorization: /^bearer /i.test(token) ? token : `Bearer ${token}` },
       body: JSON.stringify({ template_name: env('WATI_KYC_TEMPLATE', 'bsc_ledger_form'), broadcast_name: `crm_kyc_${Date.now()}`,
-        parameters: [{ name: '1', value: name || 'Sir / Madam' }, { name: '2', value: company || 'your company' }, { name: '3', value: url }] }),
+        parameters: [{ name: '1', value: name || 'Sir / Madam' }, { name: '2', value: company || 'your company' }, { name: '3', value: url },
+          ...(qrUrl && env('WATI_KYC_QR', '1') !== '0' ? [{ name: env('WATI_KYC_QR_PARAM', 'qr_image'), value: qrUrl }] : [])] }),
       signal: AbortSignal.timeout(15000)
     });
     const text = await r.text();

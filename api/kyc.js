@@ -151,7 +151,7 @@ async function deliver(sql, req, id, token, to, opt, me) {
   const who = { name: to.contact_person || '', company: to.company || '', url };
   const out = [];
   if (opt.send_email && to.email) out.push({ via: 'email', ...(await sendKycEmail({ ...who, to: to.email, logoUrl: `${appUrl(req)}/img/bsc-logo.png` })) });
-  if (opt.send_wa && to.phone) out.push({ via: 'whatsapp', ...(await sendKycWhatsApp({ ...who, phone: to.phone })) });
+  if (opt.send_wa && to.phone) out.push({ via: 'whatsapp', ...(await sendKycWhatsApp({ ...who, phone: to.phone, qrUrl: `${appUrl(req)}/qr/${token}.png` })) });
   if (out.length) {
     const log = out.map(x => ({ via: x.via, ok: x.ok, message: x.message, at: new Date().toISOString(), by: me.email }));
     await sql`UPDATE crm_kyc SET data = jsonb_set(data, '{_sent}', COALESCE(data->'_sent', '[]'::jsonb) || ${JSON.stringify(log)}::jsonb) WHERE id = ${id}`;
