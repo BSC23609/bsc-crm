@@ -147,11 +147,11 @@ function mapGoogleRow(headers, row) {
 
 // Email (info@bharatsteels.in) and/or WhatsApp the personal form link; remembers what was sent on the request.
 async function deliver(sql, req, id, token, to, opt, me) {
-  const url = `${appUrl(req)}/kyc?t=${token}`;
+  const url = `${appUrl()}/kyc`;   // one standard link and QR for every customer
   const who = { name: to.contact_person || '', company: to.company || '', url };
   const out = [];
-  if (opt.send_email && to.email) out.push({ via: 'email', ...(await sendKycEmail({ ...who, to: to.email, logoUrl: `${appUrl(req)}/img/bsc-logo.png` })) });
-  if (opt.send_wa && to.phone) out.push({ via: 'whatsapp', ...(await sendKycWhatsApp({ ...who, phone: to.phone, qrToken: token })) });
+  if (opt.send_email && to.email) out.push({ via: 'email', ...(await sendKycEmail({ ...who, to: to.email, logoUrl: `${appUrl()}/img/bsc-logo.png` })) });
+  if (opt.send_wa && to.phone) out.push({ via: 'whatsapp', ...(await sendKycWhatsApp({ ...who, phone: to.phone })) });
   if (out.length) {
     const log = out.map(x => ({ via: x.via, ok: x.ok, message: x.message, at: new Date().toISOString(), by: me.email }));
     await sql`UPDATE crm_kyc SET data = jsonb_set(data, '{_sent}', COALESCE(data->'_sent', '[]'::jsonb) || ${JSON.stringify(log)}::jsonb) WHERE id = ${id}`;
@@ -208,11 +208,28 @@ export default route(async (req, res) => {
     const missing = Object.entries(KYC_DOCS).filter(([k]) => !files.some(f => f.doc_type === k)).filter(([k]) => !(k === 'gst_shipping' && data.ship_same));
     if (missing.length && blobReady()) return send(res, 400, { error: 'Please upload: ' + missing.map(m => m[1]).join(', '), errors: Object.fromEntries(missing.map(([k, v]) => ['file_' + k, v + ' is required'])) });
     const checks = await duplicateChecks(sql, data, row.id);
-    const card = (row.data && row.data._card_code) || null;
-    const full = { ...data, _warnings: warnings, _checks: checks };
+    let card = (row.data && row.data._card_code) || null;
+    // Sent to the customer from the CRM ("Send ledger form")? The link is the same for everyone, so match the open request
+    // by mobile, email or GSTIN and carry its SAP code, lead and send history over to this submission.
+    let invite = null, sentLog = [];
+    if (!b.t) {
+      [invite] = await sql`SELECT * FROM crm_kyc WHERE status = 'invited' AND id <> ${row.id} AND (
+          (${data.phone || ''} <> '' AND data->>'phone' = ${data.phone || ''}) OR
+          (${data.email || ''} <> '' AND lower(data->>'email') = ${data.email || ''}) OR
+          (${data.gstin || ''} <> '' AND data->>'gstin' = ${data.gstin || ''}))
+        ORDER BY created_at DESC LIMIT 1`;
+      if (invite) { card = card || invite.card_code || invite.data?._card_code || null; sentLog = invite.data?._sent || []; }
+    }
+    const full = { ...data, _warnings: warnings, _checks: checks, ...(sentLog.length ? { _sent: sentLog } : {}) };
     const ref = refOf(row.id, row.created_at);
     await sql`UPDATE crm_kyc SET status = 'submitted', ref = ${ref}, data = ${JSON.stringify(full)}::jsonb, company = ${data.company}, gstin = ${data.gstin},
-              card_code = COALESCE(card_code, ${card}), submitted_at = now(), updated_at = now(), ip = ${clientIp(req)}, draft_key = NULL WHERE id = ${row.id}`;
+              card_code = COALESCE(card_code, ${card}), submitted_at = now(), updated_at = now(), ip = ${clientIp(req)}, draft_key = NULL,
+              source = ${invite ? 'invite' : 'form'}, invited_by = COALESCE(invited_by, ${invite?.invited_by || null}),
+              lead_ref = COALESCE(lead_ref, ${invite?.lead_ref || null}) WHERE id = ${row.id}`;
+    if (invite) {
+      await sql`UPDATE crm_leads SET kyc_id = ${row.id}, updated_at = now() WHERE kyc_id = ${invite.id}`;
+      await sql`DELETE FROM crm_kyc WHERE id = ${invite.id}`;
+    }
     await audit('public', 'kyc_submit', { id: row.id, ref, company: data.company });
     return send(res, 200, { ok: true, ref });
   }

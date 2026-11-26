@@ -63,9 +63,11 @@ PR **BSC23609/bsg-hub#1** adds "Customer CRM" (single sign-on, email identity) t
 
 ### 5. Email and WhatsApp for the ledger-form link
 
-"Send ledger form" (Ledger forms page, customer page or lead) creates a personal link and sends it to the customer:
-an **email from info@bharatsteels.in** with a button and QR code, and a **WhatsApp message via WATI** with the link.
-"Send link again" on a request re-sends it (e.g. to a corrected email or number); every send is logged on the request.
+"Send ledger form" (Ledger forms page, customer page or lead) sends the **standard** form link
+`https://crm.bharatsteels.in/kyc` and its QR code: an **email from info@bharatsteels.in** (button + QR) and a **WhatsApp
+message via WATI**. Every customer gets the same link and QR. When the customer submits the form with the same mobile,
+email or GSTIN, the submission is matched to the request (SAP code, lead and send history carried over).
+"Send link again" re-sends it; every send is logged on the request.
 
 Add to Vercel → bsc-crm → Environment Variables, then redeploy:
 
@@ -80,23 +82,16 @@ Add to Vercel → bsc-crm → Environment Variables, then redeploy:
 | `WATI_BASE_URL` | same as in the other group apps |
 | `WATI_TOKEN` | same as in the other group apps |
 | `WATI_KYC_TEMPLATE` | `bsc_ledger_form` (optional, this is the default) |
-| `APP_URL` | optional — the address put in every customer link and QR code; default `https://crm.bharatsteels.in` |
 
 Microsoft 365: *Authenticated SMTP* must be enabled for the info@ mailbox (M365 admin centre → Users → info@ → Mail → Manage email apps → tick **Authenticated SMTP**).
 
-WATI: create and get approved a template named **bsc_ledger_form** (category **Utility**):
+WATI: template **bsc_ledger_form** (category **Utility**):
 
-- **Header:** Image, URL `https://crm.bharatsteels.in/qr/{{qr_image}}.png` (the customer's own QR picture)
-- **Body:** uses `{{name}}` (contact person) and `{{company}}`, e.g.
+- **Header:** Image → **Upload Media** → `public/img/ledger-form-qr.png` (the standard QR for https://crm.bharatsteels.in/kyc)
+- **Body:** uses `{{name}}` and `{{company}}`
+- **Button:** Visit website, **Static**, `https://crm.bharatsteels.in/kyc`
 
-      Dear {{name}},
-      To open the customer ledger for {{company}} with Bharat Steel (Chennai) Pvt. Ltd., please fill in the Ledger Creation Data Sheet by scanning the QR code or tapping the button below.
-      Please keep your GST certificate and a cancelled cheque ready to upload.
-
-- **Button:** Visit website, Dynamic, `https://crm.bharatsteels.in/kyc?t={{1}}`
-
-The CRM sends `name`, `company`, `1` and `qr_image` (the link code), and `link` (the full address, usable as `{{link}}` in the body).
-If you prefer a text-only template (no image header), set `WATI_KYC_QR=0`.
+The CRM sends `name` (contact person) and `company`.
 
 ## Notes
 
