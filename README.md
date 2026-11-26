@@ -81,11 +81,11 @@ Add to Vercel → bsc-crm → Environment Variables, then redeploy:
 | `SMTP_FROM_NAME` | `Bharat Steel (Chennai) Pvt. Ltd.` (optional) |
 | `WATI_BASE_URL` | same as in the other group apps |
 | `WATI_TOKEN` | same as in the other group apps |
-| `WATI_KYC_TEMPLATE` | `bsc_ledger_form` (optional, this is the default) |
+| `WATI_KYC_TEMPLATE` | `bsc_ledger_form_8` (optional, this is the default) |
 
 Microsoft 365: *Authenticated SMTP* must be enabled for the info@ mailbox (M365 admin centre → Users → info@ → Mail → Manage email apps → tick **Authenticated SMTP**).
 
-WATI: template **bsc_ledger_form** (category **Utility**):
+WATI: template **bsc_ledger_form_8** (category **Utility**):
 
 - **Header:** Image → **Upload Media** → `public/img/ledger-form-qr.png` (the standard QR for https://crm.bharatsteels.in/kyc)
 - **Body:** uses `{{name}}` and `{{company}}`

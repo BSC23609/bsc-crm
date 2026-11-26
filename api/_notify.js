@@ -1,7 +1,7 @@
 // Sends the ledger-form link to a customer by email (from info@bharatsteels.in) and WhatsApp (WATI).
 // Same settings names the other group apps use (Vercel → Environment Variables):
 //   SMTP_HOST (smtp.office365.com), SMTP_PORT (587), SMTP_USER, SMTP_PASS, SMTP_FROM (info@bharatsteels.in), SMTP_FROM_NAME
-//   WATI_BASE_URL, WATI_TOKEN, WATI_KYC_TEMPLATE (default bsc_ledger_form)
+//   WATI_BASE_URL, WATI_TOKEN, WATI_KYC_TEMPLATE (default bsc_ledger_form_8)
 import nodemailer from 'nodemailer';
 import QRCode from 'qrcode';
 
@@ -64,7 +64,7 @@ export async function sendKycEmail({ to, name, company, url, logoUrl }) {
   }
 }
 
-// WhatsApp template "bsc_ledger_form" (approved in WATI):
+// WhatsApp template "bsc_ledger_form_8" (approved in WATI):
 //   Header  Image — the standard ledger-form QR (public/img/ledger-form-qr.png, uploaded once in WATI)
 //   Body    Dear {{name}}, ... ledger for {{company}} ...
 //   Button  Visit website, static  https://crm.bharatsteels.in/kyc
@@ -78,7 +78,7 @@ export async function sendKycWhatsApp({ phone, name, company }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; BSC-CRM/1.0)',
                  Authorization: /^bearer /i.test(token) ? token : `Bearer ${token}` },
-      body: JSON.stringify({ template_name: env('WATI_KYC_TEMPLATE', 'bsc_ledger_form'), broadcast_name: `crm_kyc_${Date.now()}`,
+      body: JSON.stringify({ template_name: env('WATI_KYC_TEMPLATE', 'bsc_ledger_form_8'), broadcast_name: `crm_kyc_${Date.now()}`,
         parameters: [{ name: 'name', value: name || 'Sir / Madam' }, { name: 'company', value: company || 'your company' }] }),
       signal: AbortSignal.timeout(15000)
     });
