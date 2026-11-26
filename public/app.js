@@ -166,17 +166,21 @@ async function readTable(file) {
 }
 
 /* ---------------- QR / share ---------------- */
-function qrSvg(text) { const q = qrcode(0, 'M'); q.addData(text); q.make(); return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); }
-function qrPng(text, name) { const q = qrcode(0, 'M'); q.addData(text); q.make(); const a = document.createElement('a'); a.href = q.createDataURL(10, 4); a.download = name; a.click(); }
+// QR images come from the CRM itself (with the BSC mark in the centre): /qr/ledger-form.png, /qr/feedback.png?inv=...
+function qrSrc(url) {
+  const u = new URL(url);
+  if (u.pathname.startsWith('/feedback')) return '/qr/feedback.png' + (u.searchParams.get('inv') ? '?inv=' + encodeURIComponent(u.searchParams.get('inv')) : '');
+  return '/qr/ledger-form.png';
+}
 function shareBox(url, label, waText) {
-  return `<div class="share"><div class="qr">${qrSvg(url)}</div><div style="flex:1;min-width:240px"><div class="b" style="margin-bottom:6px">${esc(label)}</div><code>${esc(url)}</code>
+  const src = qrSrc(url), file = label.replace(/\W+/g, '-').toLowerCase() + '-qr.png';
+  return `<div class="share"><div class="qr"><img src="${esc(src)}" alt="QR code" width="120" height="120" style="display:block"></div><div style="flex:1;min-width:240px"><div class="b" style="margin-bottom:6px">${esc(label)}</div><code>${esc(url)}</code>
     <div class="toolbar" style="margin:10px 0 0"><button class="btn sm sec" data-copy="${esc(url)}">Copy link</button>
-    <button class="btn sm sec" data-qr="${esc(url)}" data-qrname="${esc(label.replace(/\W+/g, '-').toLowerCase())}-qr.png">Download QR</button>
+    <a class="btn sm sec" href="${esc(src)}" download="${esc(file)}">Download QR</a>
     ${waText ? `<a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(waText)}">Share on WhatsApp</a>` : ''}</div></div></div>`;
 }
 document.addEventListener('click', e => {
   const c = e.target.closest('[data-copy]'); if (c) { copy(c.dataset.copy); return; }
-  const q = e.target.closest('[data-qr]'); if (q) qrPng(q.dataset.qr, q.dataset.qrname || 'qr.png');
 });
 const fbText = (inv) => `Dear Customer,\nWe value your feedback. Please take 1 minute to share your experience${inv ? ' for invoice ' + inv : ''}:\n${origin()}/feedback${inv ? '?inv=' + encodeURIComponent(inv) : ''}\n${S.meta?.discountPerTon ? `As a token of appreciation, you will receive an additional discount of Rs.${S.meta.discountPerTon} per ton on your next purchase.\n` : ''}- Bharat Steel (Chennai) Pvt. Ltd.`;
 const kycText = (url, company) => `Dear ${company || 'Customer'},\nTo open / update your ledger with Bharat Steel (Chennai) Pvt. Ltd., please fill in this form and upload your GST certificate and a cancelled cheque:\n${url}\nThank you.`;

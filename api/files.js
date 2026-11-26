@@ -30,6 +30,11 @@ export default route(async (req, res) => {
   if (req.method === 'GET' && query(req).get('qr')) {
     // Public QR image of a personal ledger-form link (used as the WhatsApp message picture). Only while the link is open.
     const t = String(query(req).get('qr')).replace(/\.png$/i, '');
+    if (t === 'feedback') {   // feedback form QR (optionally for one invoice: /qr/feedback.png?inv=...)
+      const inv = String(query(req).get('inv') || '').slice(0, 40);
+      const png = await qrPng(`${appUrl()}/feedback${inv ? '?inv=' + encodeURIComponent(inv) : ''}`);
+      res.statusCode = 200; res.setHeader('Content-Type', 'image/png'); res.setHeader('Cache-Control', 'public, max-age=3600'); return res.end(png);
+    }
     const [r] = t ? await sql`SELECT token FROM crm_kyc WHERE token = ${t} AND status = 'invited'` : [];
     // Unknown, used or sample token (e.g. WATI checking the template URL): the QR of the public form instead.
     const png = await qrPng(r ? `${appUrl()}/kyc?t=${r.token}` : `${appUrl()}/kyc`);

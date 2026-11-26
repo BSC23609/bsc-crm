@@ -4,6 +4,8 @@
 //   WATI_BASE_URL, WATI_TOKEN, WATI_KYC_TEMPLATE (default bsc_ledger_form_8)
 import nodemailer from 'nodemailer';
 import QRCode from 'qrcode';
+import sharp from 'sharp';
+import { BSC_MARK } from './_logo.js';
 
 const env = (k, d = '') => String(process.env[k] ?? d).trim().replace(/^['"]|['"]$/g, '').trim();
 export const emailReady = () => !!(env('SMTP_HOST') && env('SMTP_USER') && env('SMTP_PASS'));
@@ -30,7 +32,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 export async function sendKycEmail({ to, name, company, url, logoUrl }) {
   if (!emailReady()) return { ok: false, message: 'Email is not set up (SMTP_* settings)' };
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to || ''))) return { ok: false, message: 'No valid email address' };
-  const qr = await QRCode.toBuffer(url, { width: 360, margin: 2, color: { dark: '#0A2B66', light: '#FFFFFF' } });
+  const qr = await qrPng(url, 420);
   const hello = name ? `Dear ${esc(name)},` : 'Dear Sir / Madam,';
   const html = `<!doctype html><html><body style="margin:0;background:#F4F6F8;font-family:Arial,Helvetica,sans-serif;color:#1E1D1D">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F6F8;padding:24px 0"><tr><td align="center">
@@ -94,4 +96,12 @@ export async function sendKycWhatsApp({ phone, name, company }) {
   } catch (e) { return { ok: false, message: 'WhatsApp failed: ' + e.message }; }
 }
 
-export async function qrPng(url) { return QRCode.toBuffer(url, { width: 600, margin: 2, color: { dark: '#0A2B66', light: '#FFFFFF' } }); }
+// QR code with the BSC mark in the centre. Error correction H (30%) keeps it scannable with the centre covered.
+export async function qrPng(url, size = 600) {
+  const qr = await QRCode.toBuffer(url, { errorCorrectionLevel: 'H', width: size, margin: 2, color: { dark: '#0A2B66', light: '#FFFFFF' } });
+  const badge = Math.round(size * 0.26), mark = Math.round(badge * 0.86);
+  const plate = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${badge}" height="${badge}"><circle cx="${badge / 2}" cy="${badge / 2}" r="${badge / 2}" fill="#fff"/></svg>`);
+  const logo = await sharp(BSC_MARK).resize(mark, mark, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } }).png().toBuffer();
+  const at = v => Math.round((size - v) / 2);
+  return sharp(qr).composite([{ input: plate, left: at(badge), top: at(badge) }, { input: logo, left: at(mark), top: at(mark) }]).png().toBuffer();
+}
