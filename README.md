@@ -86,15 +86,17 @@ Microsoft 365: *Authenticated SMTP* must be enabled for the info@ mailbox (M365 
 
 WATI: create and get approved a template named **bsc_ledger_form** (category **Utility**):
 
-- **Header:** Media → **Image**, URL `https://crm.bharatsteels.in/qr/{{qr_image}}.png` — the CRM fills `qr_image` with the
-  customer's link code, so the picture is that customer's own QR. (The address also answers WATI's check with a sample QR.)
-- **Body**, for example:
+- **Header:** Image, URL `https://crm.bharatsteels.in/qr/{{qr_image}}.png` (the customer's own QR picture)
+- **Body:** uses `{{name}}` (contact person) and `{{company}}`, e.g.
 
-    Dear {{1}},
-    To open the customer ledger for {{2}} with Bharat Steel (Chennai) Pvt. Ltd., please fill in the Ledger Creation Data Sheet here: {{3}}
-    Please keep your GST certificate and a cancelled cheque ready to upload. Thank you.
+      Dear {{name}},
+      To open the customer ledger for {{company}} with Bharat Steel (Chennai) Pvt. Ltd., please fill in the Ledger Creation Data Sheet by scanning the QR code or tapping the button below.
+      Please keep your GST certificate and a cancelled cheque ready to upload.
 
-({{1}} contact name, {{2}} company, {{3}} the form link.) If you prefer a text-only template (no image header), set `WATI_KYC_QR=0`.
+- **Button:** Visit website, Dynamic, `https://crm.bharatsteels.in/kyc?t={{1}}`
+
+The CRM sends `name`, `company`, `1` and `qr_image` (the link code), and `link` (the full address, usable as `{{link}}` in the body).
+If you prefer a text-only template (no image header), set `WATI_KYC_QR=0`.
 
 ## Notes
 

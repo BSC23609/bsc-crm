@@ -64,9 +64,11 @@ export async function sendKycEmail({ to, name, company, url, logoUrl }) {
   }
 }
 
-// WhatsApp template (must be approved in WATI first). Body variables: {{1}} name, {{2}} company, {{3}} form link.
-// Image header: in WATI the header is Media → Image with URL  https://crm.bharatsteels.in/qr/{{qr_image}}.png
-// ({{qr_image}} = the link's token; name changeable with WATI_KYC_QR_PARAM). Set WATI_KYC_QR=0 for a text-only template.
+// WhatsApp template "bsc_ledger_form" (approved in WATI):
+//   Header  Image  https://crm.bharatsteels.in/qr/{{qr_image}}.png    -> the customer's own QR picture
+//   Body    Dear {{name}}, ... ledger for {{company}} ...
+//   Button  Visit website, dynamic  https://crm.bharatsteels.in/kyc?t={{1}}
+// qr_image and {{1}} both get the link code. Set WATI_KYC_QR=0 for a template without the image header.
 export async function sendKycWhatsApp({ phone, name, company, url, qrToken }) {
   if (!whatsappReady()) return { ok: false, message: 'WhatsApp is not set up (WATI_* settings)' };
   const to = waNumber(phone);
@@ -78,7 +80,8 @@ export async function sendKycWhatsApp({ phone, name, company, url, qrToken }) {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; BSC-CRM/1.0)',
                  Authorization: /^bearer /i.test(token) ? token : `Bearer ${token}` },
       body: JSON.stringify({ template_name: env('WATI_KYC_TEMPLATE', 'bsc_ledger_form'), broadcast_name: `crm_kyc_${Date.now()}`,
-        parameters: [{ name: '1', value: name || 'Sir / Madam' }, { name: '2', value: company || 'your company' }, { name: '3', value: url },
+        parameters: [{ name: 'name', value: name || 'Sir / Madam' }, { name: 'company', value: company || 'your company' },
+          { name: '1', value: qrToken || '' }, { name: 'link', value: url },
           ...(qrToken && env('WATI_KYC_QR', '1') !== '0' ? [{ name: env('WATI_KYC_QR_PARAM', 'qr_image'), value: qrToken }] : [])] }),
       signal: AbortSignal.timeout(15000)
     });
