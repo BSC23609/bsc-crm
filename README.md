@@ -86,8 +86,8 @@ Microsoft 365: *Authenticated SMTP* must be enabled for the info@ mailbox (M365 
 
 WATI: create and get approved a template named **bsc_ledger_form** (category **Utility**):
 
-- **Header:** Media → **Image**, URL `{{qr_image}}` (the CRM fills in the customer's own QR picture, served from
-  `https://crm.bharatsteels.in/qr/<link>.png`). For the sample image WATI asks for, use any QR PNG.
+- **Header:** Media → **Image**, URL `https://crm.bharatsteels.in/qr/{{qr_image}}.png` — the CRM fills `qr_image` with the
+  customer's link code, so the picture is that customer's own QR. (The address also answers WATI's check with a sample QR.)
 - **Body**, for example:
 
     Dear {{1}},

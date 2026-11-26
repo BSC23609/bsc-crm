@@ -30,11 +30,11 @@ export default route(async (req, res) => {
   if (req.method === 'GET' && query(req).get('qr')) {
     // Public QR image of a personal ledger-form link (used as the WhatsApp message picture). Only while the link is open.
     const t = String(query(req).get('qr')).replace(/\.png$/i, '');
-    const [r] = await sql`SELECT token FROM crm_kyc WHERE token = ${t} AND status = 'invited'`;
-    if (!r) return send(res, 404, { error: 'Not found' });
-    const png = await qrPng(`${appUrl(req)}/kyc?t=${r.token}`);
+    const [r] = t ? await sql`SELECT token FROM crm_kyc WHERE token = ${t} AND status = 'invited'` : [];
+    // Unknown, used or sample token (e.g. WATI checking the template URL): the QR of the public form instead.
+    const png = await qrPng(r ? `${appUrl()}/kyc?t=${r.token}` : `${appUrl()}/kyc`);
     res.statusCode = 200; res.setHeader('Content-Type', 'image/png'); res.setHeader('Content-Length', png.length);
-    res.setHeader('Cache-Control', 'public, max-age=86400'); return res.end(png);
+    res.setHeader('Cache-Control', r ? 'public, max-age=86400' : 'no-store'); return res.end(png);
   }
   if (req.method === 'GET') { if (!me) return send(res, 401, { error: 'Please sign in' }); return openFile(req, res); }
   if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST only' });
