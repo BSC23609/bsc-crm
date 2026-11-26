@@ -1,6 +1,37 @@
 import { route, send, readBody, getSql, needUser, query, audit, clean, cleanMulti, SEGMENTS, BUYER_TYPES, USAGE, REG_TYPES } from './_lib.js';
 import { sapStatus, customer360, moreRows } from './_sap.js';
 
+// Accounts receivable: the same receivables.csv the MIS portal reads (published by refresh_receivables.ps1 on the SAP box).
+const AR_URL = () => process.env.AR_CSV_URL || 'https://raw.githubusercontent.com/BSC23609/bsc-stock-data/main/receivables.csv';
+let arCache = null;
+function parseCsv(text) {
+  text = text.replace(/^\uFEFF/, '');
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i + 1] === '"') { f += '"'; i++; } else if (c === '"') q = false; else f += c; }
+    else if (c === '"') q = true; else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += c;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  const [head, ...body] = rows.filter(r => r.some(x => x.trim()));
+  return body.map(r => Object.fromEntries((head || []).map((h, i) => [h.trim(), (r[i] ?? '').trim()])));
+}
+async function receivables() {
+  if (arCache && Date.now() - arCache.at < 60000) return arCache;
+  const headers = { 'Cache-Control': 'no-cache' };
+  if (process.env.AR_CSV_TOKEN) headers.Authorization = `token ${process.env.AR_CSV_TOKEN}`;   // if the data repo is made private
+  const r = await fetch(AR_URL() + '?t=' + Date.now(), { headers, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) { const e = new Error(`Receivables file not reachable (${r.status})`); e.status = 502; throw e; }
+  const rows = parseCsv(await r.text()).map(x => ({
+    branch: x.Branch, card_code: x.CardCode, name: x.CardName, bill_no: x.BillNo, bill_date: x.BillDate, due_date: x.DueDate,
+    days: parseInt(x.DelayDays, 10) || 0, executive: x.Executive, amount: Number(x.Outstanding) || 0, mobile: x.Mobile, phone: x.Phone, email: x.Email
+  }));
+  arCache = { at: Date.now(), fetched: new Date().toISOString(), rows };
+  return arCache;
+}
+
 // GET                      -> all customers (as pushed from SAP every 15 min) + CRM details
 // GET ?code=C10001         -> customer 360 (SAP data + CRM history)
 // GET ?code=..&more=invoices|payments&limit=200
@@ -31,6 +62,16 @@ export default route(async (req, res) => {
 
   const me = await needUser(req);
   const q = query(req);
+
+  if (q.get('ar')) {
+    const ar = await receivables();
+    const codes = [...new Set(ar.rows.map(r => r.card_code))];
+    const known = codes.length ? await sql.query(`SELECT c.card_code, c.credit_line::float AS credit_line, c.slp_name, p.owner_email,
+        (SELECT MAX(created_at) FROM crm_activities a WHERE a.card_code = c.card_code) AS last_activity,
+        (SELECT COUNT(*)::int FROM crm_activities a WHERE a.card_code = c.card_code AND NOT a.done AND a.follow_up_at IS NOT NULL) AS open_followups
+      FROM crm_customers c LEFT JOIN crm_profiles p ON p.card_code = c.card_code WHERE c.card_code = ANY($1::text[])`, [codes]) : [];
+    return send(res, 200, { rows: ar.rows, fetched: ar.fetched, customers: Object.fromEntries(known.map(k => [k.card_code, k])) });
+  }
 
   const code = q.get('code');
   if (code && q.get('more')) {

@@ -131,6 +131,7 @@ async function downloadXlsx(name, sheet, cols, rows, title) {
       if (c.fmt === 'date') { v = d10(v) ? new Date(d10(v) + 'T00:00:00Z') : null; cell.numFmt = 'dd-mmm-yyyy'; }
       else if (c.fmt === 'inr') { v = v == null || v === '' ? null : num(v); cell.numFmt = '#,##,##0;[Red]-#,##,##0'; }
       else if (c.fmt === 'mt') { v = v == null || v === '' ? null : num(v); cell.numFmt = '#,##0.000'; }
+      else if (c.fmt === 'days') { v = v == null || v === '' ? null : num(v); cell.numFmt = '0;[Color10]-0'; }
       else if (c.fmt === 'num') { v = v == null || v === '' ? null : num(v); cell.numFmt = '0.00'; }
       else if (Array.isArray(v)) v = v.join(', ');
       cell.value = v ?? null;
@@ -139,6 +140,17 @@ async function downloadXlsx(name, sheet, cols, rows, title) {
     });
   });
   ws.autoFilter = { from: { row: r0, column: 1 }, to: { row: r0, column: cols.length } };
+  const last = r0 + rows.length, colL = i => ws.getColumn(i + 1).letter;
+  cols.forEach((c, i) => {
+    if (c.fmt === 'days' && rows.length) ws.addConditionalFormatting({ ref: `${colL(i)}${r0 + 1}:${colL(i)}${last}`, rules: [
+      { type: 'cellIs', operator: 'greaterThan', formulae: ['60'], priority: 1, style: { font: { bold: true, color: { argb: 'FFB42318' } }, fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFDE8E7' } } } },
+      { type: 'cellIs', operator: 'greaterThan', formulae: ['30'], priority: 2, style: { font: { color: { argb: 'FFB54708' } }, fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFEF4E6' } } } }] });
+  });
+  if (cols.some(c => c.total) && rows.length) {
+    const tr = ws.getRow(last + 1); tr.getCell(1).value = 'Total';
+    cols.forEach((c, i) => { const cell = tr.getCell(i + 1); cell.font = { bold: true }; cell.border = { top: { style: 'thin', color: { argb: 'FF0A2B66' } } };
+      if (c.total) { cell.value = { formula: `SUBTOTAL(9,${colL(i)}${r0 + 1}:${colL(i)}${last})` }; cell.numFmt = '#,##,##0;[Red]-#,##,##0'; } });
+  }
   const buf = await wb.xlsx.writeBuffer();
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
@@ -288,7 +300,7 @@ function sapWarn(s) {
 }
 
 /* ---------------- router ---------------- */
-const ROUTES = { '': viewDash, customers: viewCustomers, c: viewCustomer, followups: viewFollowups, leads: viewLeads, kyc: viewKyc, feedback: viewFeedback, admin: viewAdmin };
+const ROUTES = { '': viewDash, customers: viewCustomers, c: viewCustomer, followups: viewFollowups, leads: viewLeads, kyc: viewKyc, feedback: viewFeedback, ar: viewAR, admin: viewAdmin };
 function route() {
   const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
   S.hq = new URLSearchParams(qs || '');
@@ -435,6 +447,91 @@ async function viewCustomers() {
     { h: 'Sales 365 days (₹)', k: 'sales365', fmt: 'inr', w: 16 }, { h: 'Qty 365 days (MT)', k: 'qty365', fmt: 'mt', w: 14 }, { h: 'Last invoice', k: 'last_invoice', fmt: 'date', w: 13 },
     { h: 'Balance (₹)', k: 'balance', fmt: 'inr', w: 15 }, { h: 'Credit limit (₹)', k: 'credit_line', fmt: 'inr', w: 15 }, { h: 'Open orders (₹)', k: 'orders_bal', fmt: 'inr', w: 15 },
     { h: 'Feedback avg', k: 'fb_avg', fmt: 'num', w: 11 }, { h: 'Frozen', v: r => r.frozen ? 'Yes' : '', w: 8 }], rows, `Bharat Steel (Chennai) Pvt. Ltd. — Customers (${FILTERS.find(f => f[0] === CF.f)[1]}) — ${fdate(today())}`);
+  draw();
+}
+
+/* ================================================================= RECEIVABLES (same file as the MIS portal AR page) */
+const ARF = { q: '', branch: '', exe: '', overdue: true, bucket: '', sort: 'amt', open: new Set() };
+const arBucket = d => d <= 0 ? 0 : d <= 30 ? 1 : d <= 60 ? 2 : d <= 90 ? 3 : 4;
+const AR_BUCKETS = ['Not due', '1–30 days', '31–60', '61–90', '90+ days'];
+const arDays = d => d <= 0 ? `<span class="muted">${d === 0 ? 'due today' : 'in ' + -d + 'd'}</span>` : `<b style="color:${d > 60 ? 'var(--bad)' : d > 30 ? 'var(--warn)' : 'var(--ink)'}">${d}</b>`;
+async function viewAR() {
+  loading();
+  const d = await api('/api/customers?ar=1');
+  const exes = [...new Set(d.rows.map(r => r.executive).filter(Boolean))].sort();
+  const branches = [...new Set(d.rows.map(r => r.branch).filter(Boolean))].sort();
+  if (S.me.role === 'sales' && S.me.name && !ARF._init) { const mine = exes.find(e => norm(e).includes(norm(S.me.name).split(' ')[0])); if (mine) ARF.exe = mine; }
+  ARF._init = true;
+  $('#main').innerHTML = `<h1 class="pg">Receivables</h1>
+    <p class="pgsub">Open invoices from SAP — the same data as the MIS portal (refreshed about every 15 minutes) · loaded ${fdt(d.fetched)}</p>
+    <div class="kpis" id="arK"></div>
+    <div class="card"><h2>Ageing <span class="muted small" style="font-weight:400">(click a bucket to filter)</span></h2><div id="arAge"></div></div>
+    <div class="toolbar"><input type="search" id="arq" placeholder="Search customer, code or bill no." value="${esc(ARF.q)}">
+      <select id="arb">${opts(branches, ARF.branch, 'All branches')}</select>
+      <select id="are">${opts(exes, ARF.exe, 'All executives')}</select>
+      <label class="small nowrap"><input type="checkbox" id="aro" ${ARF.overdue ? 'checked' : ''}> Overdue only</label>
+      <select id="ars">${opts([['amt', 'Sort: outstanding'], ['days', 'Sort: days overdue'], ['name', 'Sort: name']], ARF.sort, null)}</select>
+      <span class="sp"></span><span class="muted small" id="arc"></span><button class="btn sm sec" id="arx">Export Excel</button></div>
+    <div class="tw" id="arT"></div>
+    <div class="card" style="margin-top:16px"><h2>By executive</h2><div id="arE"></div></div>`;
+  let groups = [], rows = [];
+  const draw = () => {
+    const q = norm(ARF.q).trim();
+    const base = d.rows.filter(r => (!ARF.branch || r.branch === ARF.branch) && (!ARF.exe || r.executive === ARF.exe)
+      && (!q || norm(r.name).includes(q) || norm(r.card_code).includes(q) || norm(r.bill_no).includes(q)));
+    rows = base.filter(r => (!ARF.overdue || r.days > 0) && (ARF.bucket === '' || arBucket(r.days) === +ARF.bucket));
+    const m = new Map();
+    rows.forEach(r => { let g = m.get(r.card_code); if (!g) m.set(r.card_code, g = { code: r.card_code, name: r.name, branch: r.branch, exe: r.executive, mobile: r.mobile || r.phone, email: r.email, amt: 0, over: 0, days: -1e9, inv: [] }); g.amt += r.amount; if (r.days > 0) g.over += r.amount; g.days = Math.max(g.days, r.days); g.inv.push(r); });
+    groups = [...m.values()];
+    groups.sort((a, b) => ARF.sort === 'name' ? a.name.localeCompare(b.name) : ARF.sort === 'days' ? b.days - a.days : b.amt - a.amt);
+    groups.forEach(g => g.inv.sort((a, b) => b.days - a.days));
+    // KPIs follow branch / executive / search but always show the whole book (not the overdue or bucket filter)
+    const sum = f => base.filter(f).reduce((a, r) => a + r.amount, 0), tot = sum(() => true), over = sum(r => r.days > 0), o60 = sum(r => r.days > 60);
+    const worst = base.reduce((w, r) => (!w || r.days > w.days ? r : w), null);
+    $('#arK').innerHTML = `<div class="kpi"><div class="l">Total outstanding</div><div class="v">${inrShort(tot)}</div><div class="s">${base.length} open invoices · ${new Set(base.map(r => r.card_code)).size} customers</div></div>
+      <div class="kpi ${over ? 'alert' : ''}"><div class="l">Overdue</div><div class="v">${inrShort(over)}</div><div class="s">${tot ? Math.round(100 * over / tot) : 0}% of outstanding · ${new Set(base.filter(r => r.days > 0).map(r => r.card_code)).size} customers</div></div>
+      <div class="kpi ${o60 ? 'alert' : ''}"><div class="l">Over 60 days</div><div class="v">${inrShort(o60)}</div><div class="s">${new Set(base.filter(r => r.days > 60).map(r => r.card_code)).size} customers</div></div>
+      <div class="kpi"><div class="l">Not yet due</div><div class="v">${inrShort(tot - over)}</div><div class="s">${base.filter(r => r.days <= 0).length} invoices</div></div>
+      <div class="kpi"><div class="l">Most days overdue</div><div class="v">${worst && worst.days > 0 ? worst.days : '—'}</div><div class="s">${esc(worst && worst.days > 0 ? worst.name : '')}</div></div>`;
+    // ageing ignores the bucket / overdue filters so it always shows the full spread
+    const ag = [0, 0, 0, 0, 0]; base.forEach(r => { ag[arBucket(r.days)] += r.amount; });
+    $('#arAge').innerHTML = stackBar(AR_BUCKETS.map((l, i) => ({ label: l, value: ag[i], color: AGE_COLORS[i] })))
+      + `<div class="toolbar" style="margin:10px 0 0">${AR_BUCKETS.map((l, i) => `<button class="btn sm ${ARF.bucket === String(i) ? '' : 'sec'}" data-bk="${i}">${l}</button>`).join('')}${ARF.bucket !== '' ? '<button class="btn sm sec" data-bk="">Clear</button>' : ''}</div>`;
+    $$('[data-bk]').forEach(b => b.onclick = () => { ARF.bucket = ARF.bucket === b.dataset.bk ? '' : b.dataset.bk; if (ARF.bucket === '0') { ARF.overdue = false; $('#aro').checked = false; } draw(); });
+    $('#arc').textContent = `${groups.length} customers`;
+    $('#arT').innerHTML = `<table><tr><th style="width:26px"></th><th>Customer</th><th>Branch</th><th>Executive</th><th class="n">Bills</th><th class="n">Max days</th><th class="n">Overdue</th><th class="n">Outstanding</th><th></th></tr>
+      ${groups.map(g => { const k = d.customers[g.code], open = ARF.open.has(g.code);
+        const msg = `Dear ${g.name},\nThis is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of ${inr(g.over || g.amt)} is ${g.over ? 'overdue' : 'outstanding'} against ${g.inv.length} bill(s):\n${g.inv.slice(0, 8).map(i => `• ${i.bill_no} dt ${fdate(i.bill_date)} – ${inr(i.amount)}${i.days > 0 ? ` (${i.days} days overdue)` : ''}`).join('\n')}${g.inv.length > 8 ? '\n…' : ''}\nKindly arrange the payment at the earliest. Please ignore if already paid.\nThank you.`;
+        return `<tr class="click" data-tg="${esc(g.code)}"><td>${open ? '▾' : '▸'}</td>
+        <td>${k ? `<a href="#/c/${encodeURIComponent(g.code)}"><b>${esc(g.name)}</b></a>` : `<b>${esc(g.name)}</b>`}<div class="small muted">${esc(g.code)}${k && k.open_followups ? ` · <span class="chip warn">${k.open_followups} follow-up</span>` : ''}${k && k.last_activity ? ` · last contact ${fdate(k.last_activity)}` : ''}</div></td>
+        <td>${esc(g.branch)}</td><td>${esc(g.exe)}</td><td class="n">${g.inv.length}</td><td class="n">${arDays(g.days)}</td>
+        <td class="n" style="${g.over ? 'color:var(--bad);font-weight:600' : ''}">${g.over ? inrShort(g.over) : '—'}</td><td class="n"><b>${inrShort(g.amt)}</b>${k && k.credit_line ? `<div class="small muted">limit ${inrShort(k.credit_line)}</div>` : ''}</td>
+        <td class="nowrap">${g.mobile ? `<a class="btn sm sec" target="_blank" rel="noopener" href="${esc(waLink(g.mobile, msg))}" data-tip="Opens WhatsApp with a payment reminder">💬 Remind</a>` : ''} ${canEdit() && k ? `<button class="btn sm sec" data-arlog="${esc(g.code)}">📞 Log</button>` : ''}</td></tr>
+        ${open ? `<tr><td></td><td colspan="8" style="background:#f8fafc"><table class="small"><tr><th>Bill no.</th><th>Bill date</th><th>Due date</th><th class="n">Days overdue</th><th class="n">Outstanding</th></tr>
+          ${g.inv.map(i => `<tr><td>${esc(i.bill_no)}</td><td>${fdate(i.bill_date)}</td><td>${fdate(i.due_date)}</td><td class="n">${arDays(i.days)}</td><td class="n">${inr(i.amount)}</td></tr>`).join('')}</table>
+          <div class="small muted" style="margin-top:6px">${[g.mobile && '📱 ' + esc(g.mobile), g.email && '✉️ ' + esc(g.email)].filter(Boolean).join(' · ')}</div></td></tr>` : ''}`; }).join('')}</table>${groups.length ? '' : '<div class="empty">Nothing matches these filters.</div>'}`;
+    $$('#arT [data-tg]').forEach(tr => tr.onclick = e => { if (e.target.closest('a,button')) return; const c = tr.dataset.tg; ARF.open.has(c) ? ARF.open.delete(c) : ARF.open.add(c); draw(); });
+    $$('[data-arlog]').forEach(b => b.onclick = () => activityModal({ card_code: b.dataset.arlog, type: 'call', subject: 'Payment follow-up', follow_up_at: addDays(today(), 3) }, () => { api('/api/customers?ar=1').then(x => { d.customers = x.customers; draw(); }); }));
+    // by executive (respects branch + search, shows all ageing)
+    const em = new Map(); base.forEach(r => { const e = em.get(r.executive) || { n: new Set(), amt: 0, over: 0, o60: 0 }; e.n.add(r.card_code); e.amt += r.amount; if (r.days > 0) e.over += r.amount; if (r.days > 60) e.o60 += r.amount; em.set(r.executive, e); });
+    const ex = [...em.entries()].sort((a, b) => b[1].amt - a[1].amt), mx = Math.max(1, ...ex.map(e => e[1].amt));
+    $('#arE').innerHTML = `<table><tr><th>Executive</th><th class="n">Customers</th><th class="n">Outstanding</th><th class="n">Overdue</th><th class="n">Over 60 days</th></tr>${ex.map(([n, e]) => `<tr class="click" data-ex="${esc(n)}"><td>${esc(n)}<div class="ibar" style="width:${100 * e.amt / mx}%"></div></td><td class="n">${e.n.size}</td><td class="n">${inrShort(e.amt)}</td><td class="n">${inrShort(e.over)}</td><td class="n" style="${e.o60 ? 'color:var(--bad)' : ''}">${inrShort(e.o60)}</td></tr>`).join('')}</table>`;
+    $$('[data-ex]').forEach(tr => tr.onclick = () => { ARF.exe = tr.dataset.ex; $('#are').value = ARF.exe; draw(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  };
+  $('#arq').oninput = e => { ARF.q = e.target.value; draw(); };
+  $('#arb').onchange = e => { ARF.branch = e.target.value; draw(); };
+  $('#are').onchange = e => { ARF.exe = e.target.value; draw(); };
+  $('#aro').onchange = e => { ARF.overdue = e.target.checked; draw(); };
+  $('#ars').onchange = e => { ARF.sort = e.target.value; draw(); };
+  $('#arx').onclick = () => {
+    const out = groups.flatMap(g => g.inv);
+    downloadXlsx(`BSC-receivables-${today()}.xlsx`, 'Receivables', [
+      { h: 'Branch', k: 'branch', w: 10 }, { h: 'SAP Code', k: 'card_code', w: 12 }, { h: 'Customer', k: 'name', w: 38 }, { h: 'Bill No.', k: 'bill_no', w: 12 },
+      { h: 'Bill date', k: 'bill_date', fmt: 'date', w: 13 }, { h: 'Due date', k: 'due_date', fmt: 'date', w: 13 }, { h: 'Days overdue', k: 'days', fmt: 'days', w: 11 },
+      { h: 'Ageing', v: r => AR_BUCKETS[arBucket(r.days)], w: 11 }, { h: 'Executive', k: 'executive', w: 20 }, { h: 'Outstanding (₹)', k: 'amount', fmt: 'inr', total: true, w: 16 },
+      { h: 'Mobile', k: 'mobile', w: 14 }, { h: 'Email', k: 'email', w: 26 }], out,
+      `Bharat Steel (Chennai) Pvt. Ltd. — Receivables${ARF.overdue ? ' (overdue only)' : ''}${ARF.exe ? ' — ' + ARF.exe : ''}${ARF.branch ? ' — ' + ARF.branch : ''} — ${fdate(today())}`);
+  };
   draw();
 }
 
