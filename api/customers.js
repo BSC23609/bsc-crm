@@ -67,14 +67,15 @@ export default route(async (req, res) => {
       const one = async code => {
         const inv = ar.rows.filter(r => r.card_code === code);
         if (!inv.length) return { code, ok: false, message: 'No open bills any more' };
-        const g = { company: inv[0].name, amount: inv.reduce((a, r) => a + r.amount, 0), overdue: inv.filter(r => r.days > 0).reduce((a, r) => a + r.amount, 0),
-          bills: inv.slice().sort((x, y) => y.days - x.days) };
-        if (g.amount <= 0) return { code, company: g.company, ok: false, message: 'Nothing outstanding' };
+        // Reminders are about overdue bills only (unpaid and past the due date); bills not yet due are left out.
+        const due = inv.filter(r => r.days > 0 && r.amount > 0).sort((x, y) => y.days - x.days);
+        const g = { company: inv[0].name, amount: due.reduce((a, r) => a + r.amount, 0), bills: due, maxDays: due.length ? due[0].days : 0 };
+        if (g.amount <= 0) return { code, company: g.company, ok: false, message: 'Nothing overdue — no reminder sent' };
         const phone = inv.map(r => r.mobile).find(p => String(p || '').replace(/\D/g, '').length >= 10) || inv.map(r => r.phone).find(p => /^(\+?91|0)?[6-9]\d{9}$/.test(String(p || '').replace(/[\s-]/g, ''))) || '';
         const email = inv.map(r => r.email).find(e => /@/.test(e || '')) || '';
         const [wa, em] = await Promise.all([b.whatsapp === false ? null : sendReminderWhatsApp(phone, g), b.email === false ? null : sendReminderEmail(email, g, logo)]);
         await sql`INSERT INTO crm_ar_reminders (card_code, company, amount, overdue, bills, phone, email, wa_ok, email_ok, detail, sent_by)
-          VALUES (${code}, ${g.company}, ${g.amount}, ${g.overdue}, ${g.bills.length}, ${phone || null}, ${email || null}, ${wa ? wa.ok : null}, ${em ? em.ok : null},
+          VALUES (${code}, ${g.company}, ${g.amount}, ${g.amount}, ${g.bills.length}, ${phone || null}, ${email || null}, ${wa ? wa.ok : null}, ${em ? em.ok : null},
                   ${JSON.stringify({ wa: wa?.message, email: em?.message })}::jsonb, ${me.email})`;
         if (known.has(code) && (wa?.ok || em?.ok)) await sql`INSERT INTO crm_activities (card_code, type, subject, notes, done, owner_email, created_by)
           VALUES (${code}, ${wa?.ok ? 'whatsapp' : 'email'}, ${'Payment reminder sent – ' + Math.round(g.amount).toLocaleString('en-IN')},

@@ -141,12 +141,13 @@ The first run of 90 days of mail takes a few runs (about 100–150 mails a run);
 ### 8. Payment reminders (Receivables tab)
 
 **Send** on a customer row, or **Send reminder** (choose several companies), sends each company:
-- **Email** from info@bharatsteels.in (same SMTP settings as step 5): company name, total outstanding, overdue amount and a table of the open bills.
+Only **overdue** bills (unpaid and past the due date) are included; companies with nothing overdue are not sent anything.
+- **Email** from info@bharatsteels.in (same SMTP settings as step 5): company name, overdue amount and a table of the overdue bills.
 - **WhatsApp** through WATI using a template. Create it in WATI → Templates → New, category **Utility**, name `bsc_payment_reminder` (or set `WATI_AR_TEMPLATE` to your name), language English, with this body:
 
-  > Dear {{company}}, this is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of {{amount}} is outstanding in your account with us ({{bills}} bill(s), {{overdue}} overdue). Kindly arrange the payment at the earliest. Please ignore this message if already paid. For queries call 044 6791 7800.
+  > Dear {{company}}, this is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of {{amount}} is overdue in your account with us against {{bills}} bill(s) past the due date. Kindly arrange the payment at the earliest. Please ignore this message if already paid. For queries call 044 6791 7800.
 
-  Sample values for approval: company `ABC Steels Pvt Ltd`, amount `₹1,25,000`, bills `3`, overdue `₹80,000`.
+  Sample values for approval: company `ABC Steels Pvt Ltd`, amount `₹80,000`, bills `2`.
 
 Amounts and contacts are read fresh from the receivables file when sending, never from the screen. The mobile and email are the ones in SAP. Every reminder is logged: "Sent <date>" on the row, an activity on the customer page, and the admin activity log. Optional: `AR_REMINDER_CC` (copy every reminder email to e.g. accounts@bharatsteels.in) and `AR_REMINDER_REPLY_TO`.
 

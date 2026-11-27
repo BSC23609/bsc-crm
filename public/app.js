@@ -461,9 +461,10 @@ function remindModal(groups, pre, done) {
   const one = pre.length === 1 ? groups.find(g => g.code === pre[0]) : null;
   const waOk = S.meta.whatsappReady, emOk = S.meta.emailReady;
   modal(`<h2>${one ? 'Send payment reminder' : 'Send payment reminders'}</h2>
-    <p class="small muted" style="margin-top:-8px">Sends each company a WhatsApp message and an email from info@bharatsteels.in with the company name, total outstanding and the open bills. Amounts are taken fresh from SAP when sending.</p>
+    <p class="small muted" style="margin-top:-8px">Sends each company a WhatsApp message and an email from info@bharatsteels.in with the company name, the <b>overdue</b> amount and the bills past their due date. Bills not yet due are left out. Amounts are taken fresh from SAP when sending.</p>
     ${one ? `<div class="card" style="margin:0 0 10px;padding:12px 14px"><b>${esc(one.name)}</b> <span class="muted small">${esc(one.code)}</span>
-        <div style="margin-top:4px">Outstanding <b>${inr(one.amt)}</b>${one.over ? ` · overdue <b style="color:var(--bad)">${inr(one.over)}</b>` : ''} · ${one.inv.length} bill(s)</div>
+        <div style="margin-top:4px">Overdue <b style="color:var(--bad)">${inr(one.over)}</b> · ${one.inv.filter(i => i.days > 0).length} bill(s) past due${one.amt > one.over ? ` <span class="muted small">(not yet due ${inrShort(one.amt - one.over)} — not included)</span>` : ''}</div>
+        ${one.over ? '' : '<div class="banner warn" style="margin:8px 0 0">Nothing is overdue for this company, so no reminder will be sent.</div>'}
         <div class="small muted" style="margin-top:4px">💬 ${esc(one.mobile || 'no mobile')} · ✉️ ${esc(one.email || 'no email')}</div></div>`
       : `<div class="toolbar" style="margin:0 0 6px"><input type="search" id="rq" placeholder="Search company"><button class="btn sm sec" id="rAll">Select all shown</button><button class="btn sm sec" id="rNone">Clear</button><span class="sp"></span><b id="rCount"></b></div>
         <div class="tw" style="max-height:340px"><table id="rList"></table></div>`}
@@ -476,16 +477,15 @@ function remindModal(groups, pre, done) {
     if (one) return;
     const q = norm($('#rq').value).trim();
     const shown = groups.filter(g => !q || norm(g.name).includes(q) || norm(g.code).includes(q));
-    $('#rList').innerHTML = `<tr><th></th><th>Company</th><th class="n">Outstanding</th><th class="n">Overdue</th><th class="n">Max days</th><th>Mobile / email</th></tr>` + shown.map(g => `<tr>
-      <td><input type="checkbox" data-rc="${esc(g.code)}" ${sel.has(g.code) ? 'checked' : ''} ${g.mobile || g.email ? '' : 'disabled'}></td>
-      <td><b>${esc(g.name)}</b><div class="small muted">${esc(g.code)} · ${esc(g.exe || '')}</div></td><td class="n">${inrShort(g.amt)}</td>
-      <td class="n" style="${g.over ? 'color:var(--bad)' : ''}">${g.over ? inrShort(g.over) : '—'}</td><td class="n">${arDays(g.days)}</td>
+    $('#rList').innerHTML = `<tr><th></th><th>Company</th><th class="n">Overdue</th><th class="n">Outstanding</th><th class="n">Max days</th><th>Mobile / email</th></tr>` + shown.map(g => `<tr>
+      <td><input type="checkbox" data-rc="${esc(g.code)}" ${sel.has(g.code) ? 'checked' : ''} ${(g.mobile || g.email) && g.over > 0 ? '' : 'disabled'}></td>
+      <td><b>${esc(g.name)}</b><div class="small muted">${esc(g.code)} · ${esc(g.exe || '')}</div></td><td class="n" style="${g.over ? 'color:var(--bad);font-weight:600' : ''}">${g.over ? inrShort(g.over) : '—'}</td><td class="n muted">${inrShort(g.amt)}</td><td class="n">${arDays(g.days)}</td>
       <td class="small">${g.mobile ? '💬 ' + esc(g.mobile) : '<span class="muted">no mobile</span>'}<br>${g.email ? '✉️ ' + esc(g.email) : '<span class="muted">no email</span>'}</td></tr>`).join('');
     $$('[data-rc]').forEach(c => c.onchange = () => { c.checked ? sel.add(c.dataset.rc) : sel.delete(c.dataset.rc); count(); });
-    $('#rAll').onclick = () => { shown.forEach(g => { if (g.mobile || g.email) sel.add(g.code); }); list(); };
+    $('#rAll').onclick = () => { shown.forEach(g => { if ((g.mobile || g.email) && g.over > 0) sel.add(g.code); }); list(); };
     count();
   };
-  const count = () => { if (!one) { const t = groups.filter(g => sel.has(g.code)).reduce((a, g) => a + g.amt, 0); $('#rCount').textContent = `${sel.size} selected · ${inrShort(t)}`; } };
+  const count = () => { if (!one) { const t = groups.filter(g => sel.has(g.code)).reduce((a, g) => a + g.over, 0); $('#rCount').textContent = `${sel.size} selected · ${inrShort(t)} overdue`; } };
   if (!one) { $('#rq').oninput = list; $('#rNone').onclick = () => { sel.clear(); list(); }; list(); }
   $('#rGo').onclick = async () => {
     const wa = $('#rWA').checked, em = $('#rEM').checked;
@@ -555,7 +555,7 @@ async function viewAR() {
         <td>${k ? `<a href="#/c/${encodeURIComponent(g.code)}"><b>${esc(g.name)}</b></a>` : `<b>${esc(g.name)}</b>`}<div class="small muted">${esc(g.code)}${k && k.open_followups ? ` · <span class="chip warn">${k.open_followups} follow-up</span>` : ''}${k && k.last_activity ? ` · last contact ${fdate(k.last_activity)}` : ''}</div></td>
         <td>${esc(g.branch)}</td><td>${esc(g.exe)}</td><td class="n">${g.inv.length}</td><td class="n">${arDays(g.days)}</td>
         <td class="n" style="${g.over ? 'color:var(--bad);font-weight:600' : ''}">${g.over ? inrShort(g.over) : '—'}</td><td class="n"><b>${inrShort(g.amt)}</b>${k && k.credit_line ? `<div class="small muted">limit ${inrShort(k.credit_line)}</div>` : ''}</td>
-        <td class="nowrap">${canEdit() ? `<button class="btn sm" data-arsend="${esc(g.code)}" ${g.mobile || g.email ? '' : 'disabled title="No mobile or email in SAP"'}>📨 Send</button>` : ''}
+        <td class="nowrap">${canEdit() ? `<button class="btn sm" data-arsend="${esc(g.code)}" ${!(g.mobile || g.email) ? 'disabled title="No mobile or email in SAP"' : !g.over ? 'disabled title="Nothing overdue"' : ''}>📨 Send</button>` : ''}
           ${rm ? `<div class="small muted" data-tip="${esc(`Last reminder ${fdt(rm.sent_at)} by ${rm.sent_by || ''}<br>WhatsApp: ${rm.wa_ok == null ? 'not sent' : rm.wa_ok ? 'sent' : 'failed'}<br>Email: ${rm.email_ok == null ? 'not sent' : rm.email_ok ? 'sent' : 'failed'}`)}">Sent ${fdate(rm.sent_at)} ${rm.wa_ok ? '💬' : ''}${rm.email_ok ? '✉️' : ''}${rm.wa_ok === false || rm.email_ok === false ? ' ⚠️' : ''}</div>` : ''}</td>
         <td class="nowrap">${canEdit() && k ? `<button class="btn sm sec" data-arlog="${esc(g.code)}">📞 Log</button>` : ''}</td></tr>
         ${open ? `<tr><td></td><td colspan="9" style="background:#f8fafc"><table class="small"><tr><th>Bill no.</th><th>Bill date</th><th>Due date</th><th class="n">Days overdue</th><th class="n">Outstanding</th></tr>

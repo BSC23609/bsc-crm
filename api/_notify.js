@@ -22,10 +22,17 @@ function watiBase() {
   return b;
 }
 export function waNumber(raw) {
-  let d = String(raw || '').replace(/\D/g, '');
-  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
-  if (d.length === 10) d = '91' + d;
-  return d.length >= 11 ? d : null;
+  // SAP fields often hold several numbers ("98401 81909, 9840067170, 044-42107549"): use the first Indian mobile.
+  const parts = String(raw || '').split(/[,;/|]|\s{2,}|\bor\b|&/i).map(p => p.replace(/\D/g, '')).filter(Boolean);
+  for (let d of parts.length ? parts : ['']) {
+    if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+    if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+    if (d.length === 10 && /^[6-9]/.test(d)) return '91' + d;
+  }
+  const all = String(raw || '').replace(/\D/g, '');   // a single number written with odd separators
+  if (all.length === 10 && /^[6-9]/.test(all)) return '91' + all;
+  if (all.length === 12 && /^91[6-9]/.test(all)) return all;
+  return null;
 }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -129,9 +136,10 @@ export async function sendOtpWhatsApp(phone, code) {
 
 /* ---------------- Payment reminders (Receivables tab) ---------------- */
 // WhatsApp template (create + get approved in WATI, category Utility), name in WATI_AR_TEMPLATE (default bsc_payment_reminder):
-//   Body: Dear {{company}}, this is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of {{amount}} is outstanding
-//         in your account with us ({{bills}} bill(s), {{overdue}} overdue). Kindly arrange the payment at the earliest.
+//   Body: Dear {{company}}, this is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of {{amount}} is overdue
+//         in your account with us against {{bills}} bill(s) past the due date. Kindly arrange the payment at the earliest.
 //         Please ignore this message if already paid. For queries call 044 6791 7800.
+// Only overdue bills (unpaid and past the due date) are included; g.amount is the overdue total.
 export async function watiTemplate(phone, template, params, tag = 'crm') {
   if (!whatsappReady()) return { ok: false, message: 'WhatsApp is not set up (WATI_* settings)' };
   const to = waNumber(phone);
@@ -163,11 +171,11 @@ function mailer() {
 }
 // g: { company, amount, overdue, bills:[{bill_no,bill_date,due_date,days,amount}] }
 export function reminderText(g) {
-  return `Dear ${g.company}, this is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of ${inr(g.amount)} is outstanding in your account with us (${g.bills.length} bill(s), ${inr(g.overdue)} overdue). Kindly arrange the payment at the earliest. Please ignore this message if already paid. For queries call 044 6791 7800.`;
+  return `Dear ${g.company}, this is a gentle reminder from Bharat Steel (Chennai) Pvt. Ltd. An amount of ${inr(g.amount)} is overdue in your account with us against ${g.bills.length} bill(s) past the due date. Kindly arrange the payment at the earliest. Please ignore this message if already paid. For queries call 044 6791 7800.`;
 }
 export async function sendReminderWhatsApp(phone, g) {
   return watiTemplate(phone, env('WATI_AR_TEMPLATE', 'bsc_payment_reminder'),
-    { company: g.company, amount: inr(g.amount), bills: g.bills.length, overdue: inr(g.overdue) }, 'crm_ar');
+    { company: g.company, amount: inr(g.amount), bills: g.bills.length }, 'crm_ar');
 }
 export async function sendReminderEmail(to, g, logoUrl) {
   if (!emailReady()) return { ok: false, message: 'Email is not set up (SMTP_* settings)' };
@@ -183,12 +191,12 @@ export async function sendReminderEmail(to, g, logoUrl) {
   <tr><td style="padding:22px 28px 6px"><img src="${esc(logoUrl)}" alt="Bharat Steel (Chennai) Pvt. Ltd." height="44" style="display:block;height:44px"></td></tr>
   <tr><td style="padding:10px 28px 0;font-size:15px;line-height:1.55">
     <p style="margin:0 0 12px">Dear <b>${esc(g.company)}</b>,</p>
-    <p style="margin:0 0 12px">This is a gentle reminder that an amount of <b>${inr(g.amount)}</b> is outstanding in your account with Bharat Steel (Chennai) Pvt. Ltd.${g.overdue ? `, of which <b style="color:#B42318">${inr(g.overdue)}</b> is past the due date` : ''}. The open bills are listed below.</p>
+    <p style="margin:0 0 12px">This is a gentle reminder that an amount of <b style="color:#B42318">${inr(g.amount)}</b> is overdue in your account with Bharat Steel (Chennai) Pvt. Ltd. The bills past their due date are listed below.</p>
   </td></tr>
   <tr><td style="padding:4px 28px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse">
     <tr style="background:#0A2B66;color:#ffffff"><th align="left" style="padding:7px 8px">Bill no.</th><th align="left" style="padding:7px 8px">Bill date</th><th align="left" style="padding:7px 8px">Due date</th><th align="right" style="padding:7px 8px">Days overdue</th><th align="right" style="padding:7px 8px">Outstanding</th></tr>
     ${rows}
-    <tr><td colspan="4" style="padding:8px;font-weight:bold;border-top:2px solid #0A2B66">Total outstanding</td><td style="padding:8px;text-align:right;font-weight:bold;border-top:2px solid #0A2B66">${inr(g.amount)}</td></tr>
+    <tr><td colspan="4" style="padding:8px;font-weight:bold;border-top:2px solid #0A2B66">Total overdue</td><td style="padding:8px;text-align:right;font-weight:bold;border-top:2px solid #0A2B66">${inr(g.amount)}</td></tr>
   </table></td></tr>
   <tr><td style="padding:16px 28px 24px;font-size:14px;line-height:1.55">Kindly arrange the payment at the earliest and share the payment details by reply to this email. Please ignore this reminder if the payment has already been made.<br><br>For any clarification call 044 6791 7800 or WhatsApp <a href="https://wa.me/919500680093" style="color:#01578C">+91 95006 80093</a>.<br><br>Regards,<br><b>Accounts – Bharat Steel (Chennai) Pvt. Ltd.</b></td></tr>
   <tr><td style="background:#F4F6F8;padding:14px 28px;font-size:11.5px;color:#5b6475;line-height:1.5">No.147, Survey No. 133, Thirunilai Village, Ponneri Taluk, Chennai - 600103 · 044 6791 7800 · info@bharatsteels.in · www.bharatsteels.in</td></tr>
@@ -198,7 +206,7 @@ export async function sendReminderEmail(to, g, logoUrl) {
     const from = env('SMTP_FROM', 'info@bharatsteels.in');
     const cc = env('AR_REMINDER_CC');
     await mailer().sendMail({ from: { name: env('SMTP_FROM_NAME', 'Bharat Steel (Chennai) Pvt. Ltd.'), address: from }, replyTo: env('AR_REMINDER_REPLY_TO', from), to: list, ...(cc ? { cc } : {}),
-      subject: `Payment reminder – ${inr(g.amount)} outstanding | ${g.company}`, text, html });
+      subject: `Payment reminder – ${inr(g.amount)} overdue | ${g.company}`, text, html });
     return { ok: true, message: 'Email sent to ' + list.join(', ') };
   } catch (e) {
     _tx = null;
