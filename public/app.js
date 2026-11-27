@@ -504,6 +504,48 @@ function remindModal(groups, pre, done) {
     } catch (e) { $('#rErr').textContent = e.message; $('#rGo').disabled = false; $('#rGo').textContent = 'Send'; }
   };
 }
+// WhatsApp / email check for one kind of message: setup, a test send to your own number / email, and the log of recent sends.
+const MSG_KIND = { kyc: 'Ledger form', ar: 'Payment reminder', feedback: 'Feedback form' };
+async function msgTestModal(kind) {
+  const d = await api('/api/crm', { action: 'msg_log', kind });
+  const st = d.setup, F = { failed: false };
+  modal(`<h2>${MSG_KIND[kind]} — WhatsApp &amp; email test and log</h2>
+    <div class="row" style="gap:12px;margin:0 0 12px">
+      <div class="card" style="flex:1;margin:0;padding:12px 14px"><b>WhatsApp</b> ${st.whatsapp ? '<span class="chip ok">Connected</span>' : '<span class="chip bad">Not set up</span>'}
+        <div class="small muted" style="margin-top:4px">${st.whatsapp ? `WATI ${esc(st.wati)}<br>` : 'Add WATI_BASE_URL and WATI_TOKEN in Vercel, then redeploy.<br>'}Template <code>${esc(st.template)}</code> with variables ${st.params.map(p => `<code>{{${esc(p)}}}</code>`).join(' ')}</div></div>
+      <div class="card" style="flex:1;margin:0;padding:12px 14px"><b>Email</b> ${st.email ? '<span class="chip ok">Connected</span>' : '<span class="chip bad">Not set up</span>'}
+        <div class="small muted" style="margin-top:4px">${st.email ? `Sent from ${esc(st.from)}` : 'Add the SMTP_* settings in Vercel, then redeploy.'}</div></div></div>
+    ${canEdit() ? `<h3>Send a test</h3><p class="small muted" style="margin-top:-6px">Sends the real ${MSG_KIND[kind].toLowerCase()} message with sample values (company "TEST – ABC Steels Pvt Ltd") to your own number / email — not to any customer.</p>
+    <div class="fg"><div class="f"><label>Mobile (WhatsApp)</label><input id="tM" inputmode="tel" value="${esc(S.me.mobile || '')}" placeholder="10-digit mobile"></div>
+      <div class="f"><label>Email</label><input id="tE" type="email" value="${esc(S.me.email || '')}" placeholder="you@bharatsteels.in"></div></div>
+    <div class="err" id="tErr"></div><div id="tOut"></div>
+    <div class="acts" style="margin-top:4px"><button class="btn" id="tGo">🧪 Send test</button></div>` : ''}
+    <h3 style="display:flex;align-items:center;gap:10px">Log <span class="small muted" style="font-weight:400">tests and real sends, newest first</span><span class="sp" style="flex:1"></span>
+      <label class="small" style="font-weight:500"><input type="checkbox" id="tF"> Failed only</label></h3>
+    <div class="tw" style="max-height:320px" id="tLog"></div>
+    <div class="acts"><button class="btn sec" onclick="closeModal()">Close</button></div>`, 'wide');
+  const drawLog = log => {
+    const rows = log.filter(x => !F.failed || !x.ok);
+    $('#tLog').innerHTML = rows.length ? `<table class="small" style="width:100%"><tr><th>When</th><th>Company</th><th>Via</th><th>To</th><th>Result</th><th>By</th></tr>${rows.map(x => `<tr>
+      <td class="nowrap">${fdt(x.at)}</td><td style="max-width:170px">${x.test ? '<span class="chip info">Test</span>' : esc(x.company || '')}</td><td class="nowrap">${x.via === 'whatsapp' ? '💬' : '✉️'}</td>
+      <td style="max-width:150px;word-break:break-word">${esc(x.to || '')}</td><td style="max-width:300px;word-break:break-word;color:${x.ok ? 'var(--ok)' : 'var(--bad)'}">${x.ok ? '✓' : '✗'} ${esc(x.message || '')}</td><td class="muted">${esc(x.by || '')}</td></tr>`).join('')}</table>`
+      : '<div class="empty">Nothing sent yet.</div>';
+  };
+  let log = d.log; drawLog(log);
+  $('#tF').onchange = e => { F.failed = e.target.checked; drawLog(log); };
+  if ($('#tGo')) $('#tGo').onclick = async () => {
+    const phone = $('#tM').value.trim(), email = $('#tE').value.trim();
+    if (!phone && !email) { $('#tErr').textContent = 'Enter a mobile number or an email'; return; }
+    $('#tGo').disabled = true; $('#tGo').textContent = 'Sending…'; $('#tErr').textContent = '';
+    try {
+      const r = await api('/api/crm', { action: 'test_send', kind, phone, email });
+      $('#tOut').innerHTML = r.results.map(m => `<div class="banner ${m.ok ? 'ok' : 'bad'}" style="margin:6px 0">${m.via === 'whatsapp' ? '💬' : '✉️'} ${m.ok ? '✓' : '✗'} ${esc(m.message)}</div>`).join('')
+        + (r.results.some(m => m.via === 'whatsapp' && m.ok) ? '<p class="small muted">WATI accepted the message. If it does not arrive within a minute, check the template status in WATI (it must be Approved) and WATI → Broadcast history for the delivery error.</p>' : '');
+      log = (await api('/api/crm', { action: 'msg_log', kind })).log; drawLog(log);
+    } catch (e) { $('#tErr').textContent = e.message; }
+    $('#tGo').disabled = false; $('#tGo').textContent = '🧪 Send test';
+  };
+}
 async function viewAR() {
   loading();
   const d = await api('/api/customers?ar=1');
@@ -520,7 +562,7 @@ async function viewAR() {
       <select id="are">${opts(exes, ARF.exe, 'All executives')}</select>
       <label class="small nowrap"><input type="checkbox" id="aro" ${ARF.overdue ? 'checked' : ''}> Overdue only</label>
       <select id="ars">${opts([['amt', 'Sort: outstanding'], ['days', 'Sort: days overdue'], ['name', 'Sort: name']], ARF.sort, null)}</select>
-      <span class="sp"></span><span class="muted small" id="arc"></span>${canEdit() ? '<button class="btn sm" id="arRem">📨 Send reminder</button>' : ''}<button class="btn sm sec" id="arx">Export Excel</button></div>
+      <span class="sp"></span><span class="muted small" id="arc"></span>${canEdit() ? '<button class="btn sm" id="arRem">📨 Send reminder</button>' : ''}<button class="btn sm sec" id="arTest">🧪 Test &amp; log</button><button class="btn sm sec" id="arx">Export Excel</button></div>
     <div class="tw" id="arT"></div>
     <div class="card" style="margin-top:16px"><h2>By executive</h2><div id="arE"></div></div>`;
   let groups = [], rows = [];
@@ -576,6 +618,7 @@ async function viewAR() {
   $('#aro').onchange = e => { ARF.overdue = e.target.checked; draw(); };
   $('#ars').onchange = e => { ARF.sort = e.target.value; draw(); };
   const reload = async () => { const x = await api('/api/customers?ar=1'); d.customers = x.customers; d.reminders = x.reminders; draw(); };
+  $('#arTest').onclick = () => msgTestModal('ar');
   if ($('#arRem')) $('#arRem').onclick = () => remindModal(groups, [], reload);
   $('#arx').onclick = () => {
     const out = groups.flatMap(g => g.inv);
@@ -946,7 +989,7 @@ async function viewKyc(id) {
     <div class="card">${shareBox(origin() + '/kyc', 'Public ledger form link', kycText(origin() + '/kyc'))}</div>
     <div class="toolbar"><div class="seg">${[['open', 'To process'], ['invited', 'Links sent'], ['created', 'In SAP'], ['rejected', 'Rejected'], ['all', 'All']].map(([k, l]) => `<button data-k="${k}" class="${KF === k ? 'on' : ''}">${l} (${cnt(k)})</button>`).join('')}</div>
       <input type="search" id="kq" placeholder="Search company, GSTIN, ref"><span class="sp"></span>
-      ${canEdit() ? '<button class="btn" id="kInv">+ Send form to a customer</button><button class="btn sec" id="kImp">Import Google Form responses</button><button class="btn sec" id="kXl">SAP sheet (Excel)</button>' : ''}</div>
+      ${canEdit() ? '<button class="btn" id="kInv">+ Send form to a customer</button><button class="btn sec" id="kImp">Import Google Form responses</button><button class="btn sec" id="kXl">SAP sheet (Excel)</button>' : ''}<button class="btn sec" id="kTest">🧪 Test &amp; log</button></div>
     <div class="tw" id="ktab"></div>`;
   const draw = () => {
     const q = norm($('#kq').value);
@@ -961,6 +1004,7 @@ async function viewKyc(id) {
   $$('.seg [data-k]').forEach(b => b.onclick = () => { KF = b.dataset.k; viewKyc(); });
   $('#kq').oninput = draw; draw();
   if ($('#kInv')) $('#kInv').onclick = () => inviteKyc({});
+  $('#kTest').onclick = () => msgTestModal('kyc');
   if ($('#kImp')) $('#kImp').onclick = () => importModal('Import ledger form responses', 'In Google Forms open Responses → Link to Sheets (or the ⋮ menu → Download responses .csv). Upload that CSV or the Excel download of the sheet. Rows already imported are skipped; Drive links to the documents are kept.', async t => {
     const r = await api('/api/kyc', { action: 'import', headers: t.headers, rows: t.rows });
     return `${r.added} added, ${r.skipped} skipped.${r.problems.length ? '\n\nTo check:\n' + r.problems.join('\n') : ''}`;
@@ -1169,13 +1213,14 @@ async function viewFeedback() {
     <div class="toolbar"><div class="seg">${[['customers', 'Customer list'], ['analytics', 'Analytics'], ['responses', 'Responses']].map(([k, l]) => `<button data-tab="${k}" class="${FBF.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <select id="fbP">${opts([['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 6 months'], ['365', 'Last 12 months'], ['fy', 'This financial year'], ['all', 'All time']], FBF.period, null)}</select>
       <select id="fbS">${opts(slps, FBF.slp, 'All salespersons')}</select><span class="sp"></span>
-      ${canEdit() ? '<button class="btn" id="fbSend">📨 Send feedback</button><button class="btn sec" id="fbRel">Re-match invoices</button><button class="btn sec" id="fbImp">Import Microsoft Forms</button>' : ''}<button class="btn sec" id="fbXl">Export Excel</button></div>
+      ${canEdit() ? '<button class="btn" id="fbSend">📨 Send feedback</button><button class="btn sec" id="fbRel">Re-match invoices</button><button class="btn sec" id="fbImp">Import Microsoft Forms</button>' : ''}<button class="btn sec" id="fbTest">🧪 Test &amp; log</button><button class="btn sec" id="fbXl">Export Excel</button></div>
     <div id="fbBody"></div>`;
   $$('[data-tab]').forEach(b => b.onclick = () => { FBF.tab = b.dataset.tab; viewFeedback(); });
   $('#fbP').onchange = e => { FBF.period = e.target.value; viewFeedback(); };
   $('#fbS').onchange = e => { FBF.slp = e.target.value; viewFeedback(); };
   let custRows = null;
   const loadCust = async () => { if (!custRows) custRows = (await api('/api/feedback', { action: 'customers', from: from === '0000' ? '2000-01-01' : from })).rows.filter(r => !FBF.slp || (r.slp_name || r.inv_slp) === FBF.slp); return custRows; };
+  $('#fbTest').onclick = () => msgTestModal('feedback');
   if ($('#fbSend')) $('#fbSend').onclick = async () => fbSendModal(await loadCust(), [], () => { custRows = null; if (FBF.tab === 'customers') viewFeedback(); });
   if ($('#fbRel')) $('#fbRel').onclick = async () => { const r = await api('/api/feedback', { action: 'relink' }); toast(`${r.linked} of ${r.checked} unmatched responses matched to SAP`); viewFeedback(); };
   if ($('#fbImp')) $('#fbImp').onclick = () => importModal('Import Microsoft Forms responses', 'In Microsoft Forms open the form → Responses → Open results in Excel, save it, and upload the .xlsx here. Already-imported rows are skipped. Imported responses older than 90 days are marked “no discount”.', async t => {

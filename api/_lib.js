@@ -348,7 +348,7 @@ export function clearSession(req, res) {
 export async function currentUser(req) {
   const p = verify(cookies(req)[COOKIE]);
   if (!p) return null;
-  const rows = await getSql()`SELECT id, email, name, role, slp_code, emp_code, must_change FROM crm_users WHERE id = ${p.uid} AND active = true`;
+  const rows = await getSql()`SELECT id, email, name, role, slp_code, emp_code, mobile, must_change FROM crm_users WHERE id = ${p.uid} AND active = true`;
   return rows[0] || null;
 }
 // The common starting password for new and imported staff (they must change it at first sign-in).

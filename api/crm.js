@@ -1,7 +1,7 @@
 // Activities & follow-ups, leads pipeline, dashboard.
 import { route, send, readBody, getSql, needUser, audit, loadConfig, fail, clean, cleanMulti, phoneDigits, canEdit, isAdmin, gstinProblem, SEGMENTS, BUYER_TYPES, USAGE, REG_TYPES } from './_lib.js';
 import { sapStatus, summary } from './_sap.js';
-import { emailReady, whatsappReady, appUrl } from './_notify.js';
+import { emailReady, whatsappReady, appUrl, sendKycWhatsApp, sendKycEmail, sendReminderWhatsApp, sendReminderEmail, sendFeedbackWhatsApp, sendFeedbackEmail } from './_notify.js';
 import { runMailSync, mailStatus } from './_mail.js';
 
 const TYPES = ['call', 'visit', 'whatsapp', 'email', 'meeting', 'complaint', 'note'];
@@ -123,6 +123,34 @@ export default route(async (req, res) => {
     return send(res, 200, { rows });
   }
 
+
+  /* ---------- WhatsApp / email: setup status, test send, log (Ledger forms, Receivables, Feedback) ---------- */
+  if (b.action === 'msg_log') {
+    const kind = ['kyc', 'ar', 'feedback'].includes(b.kind) ? b.kind : 'kyc';
+    const E = (k, d) => String(process.env[k] || d).trim();
+    const setup = {
+      whatsapp: whatsappReady(), email: emailReady(), from: E('SMTP_FROM', 'info@bharatsteels.in'),
+      wati: (E('WATI_BASE_URL', '').match(/^https?:\/\/[^/]+/) || [''])[0],
+      template: kind === 'kyc' ? E('WATI_KYC_TEMPLATE', 'bsc_ledger_form_8') : kind === 'ar' ? E('WATI_AR_TEMPLATE', 'bsc_payment_reminder') : E('WATI_FEEDBACK_TEMPLATE', 'bsc_feedback_request'),
+      params: kind === 'kyc' ? ['name', 'company'] : kind === 'ar' ? ['company', 'amount', 'bills'] : ['company', 'invoice', 'link']
+    };
+    const tests = (await sql`SELECT who, detail, at FROM crm_audit WHERE action = 'test_send' AND detail->>'kind' = ${kind} ORDER BY at DESC LIMIT 30`)
+      .flatMap(t => (t.detail.results || []).map(r => ({ at: t.at, by: t.who, company: 'TEST', to: r.to, via: r.via, ok: r.ok, message: r.message, test: true })));
+    let real = [];
+    if (kind === 'kyc') {
+      real = (await sql`SELECT k.company, x.value AS s FROM crm_kyc k, jsonb_array_elements(COALESCE(k.data->'_sent', '[]'::jsonb)) x
+          ORDER BY (x.value->>'at') DESC LIMIT 100`).map(r => ({ at: r.s.at, by: r.s.by, company: r.company, via: r.s.via, ok: r.s.ok, message: r.s.message }));
+    } else {
+      const rows = kind === 'ar'
+        ? await sql`SELECT company, phone, email, wa_ok, email_ok, detail, sent_by, sent_at FROM crm_ar_reminders ORDER BY sent_at DESC LIMIT 60`
+        : await sql`SELECT company, phone, email, wa_ok, email_ok, detail, sent_by, sent_at FROM crm_fb_requests ORDER BY sent_at DESC LIMIT 60`;
+      real = rows.flatMap(r => [r.wa_ok != null && { at: r.sent_at, by: r.sent_by, company: r.company, to: r.phone, via: 'whatsapp', ok: r.wa_ok, message: r.detail?.wa },
+        r.email_ok != null && { at: r.sent_at, by: r.sent_by, company: r.company, to: r.email, via: 'email', ok: r.email_ok, message: r.detail?.email }].filter(Boolean));
+    }
+    const log = [...tests, ...real].sort((a, b2) => new Date(b2.at) - new Date(a.at)).slice(0, 150);
+    return send(res, 200, { setup, log });
+  }
+
   if (!canEdit(me)) throw fail(403, 'You have view-only access');
 
   if (b.action === 'activity_save') {
@@ -186,6 +214,31 @@ export default route(async (req, res) => {
     return send(res, 200, { ok: true, id });
   }
 
+
+  if (b.action === 'test_send') {   // send the real template with sample values to a staff number / email
+    const kind = ['kyc', 'ar', 'feedback'].includes(b.kind) ? b.kind : 'kyc';
+    const phone = clean(b.phone, 30), email = clean(b.email, 160).toLowerCase();
+    if (!phone && !email) return send(res, 400, { error: 'Enter a mobile number or an email to test with' });
+    const base = appUrl(), logo = base + '/img/bsc-logo.png';
+    const company = 'TEST – ABC Steels Pvt Ltd';
+    const results = [];
+    if (kind === 'kyc') {
+      if (phone) results.push({ via: 'whatsapp', to: phone, ...(await sendKycWhatsApp({ phone, name: me.name || 'Test', company })) });
+      if (email) results.push({ via: 'email', to: email, ...(await sendKycEmail({ to: email, name: me.name || 'Test', company, url: base + '/kyc', logoUrl: logo })) });
+    } else if (kind === 'ar') {
+      const g = { company, amount: 80000, maxDays: 45, bills: [
+        { bill_no: 'TEST/0001', bill_date: '2026-09-01', due_date: '2026-10-01', days: 45, amount: 50000 },
+        { bill_no: 'TEST/0002', bill_date: '2026-10-05', due_date: '2026-11-04', days: 11, amount: 30000 }] };
+      if (phone) results.push({ via: 'whatsapp', to: phone, ...(await sendReminderWhatsApp(phone, g)) });
+      if (email) results.push({ via: 'email', to: email, ...(await sendReminderEmail(email, g, logo)) });
+    } else {
+      const f = { company, invoice: 'TEST/0001', link: base + '/feedback?inv=TEST%2F0001' };
+      if (phone) results.push({ via: 'whatsapp', to: phone, ...(await sendFeedbackWhatsApp(phone, f)) });
+      if (email) results.push({ via: 'email', to: email, ...(await sendFeedbackEmail(email, f, logo)) });
+    }
+    await audit(me.email, 'test_send', { kind, results: results.map(r => ({ via: r.via, to: r.to, ok: r.ok, message: r.message })) });
+    return send(res, 200, { results });
+  }
   if (b.action === 'mail_sync') {
     if (!isAdmin(me)) throw fail(403, 'Admins only');
     return send(res, 200, await runMailSync({ budgetMs: 80000, who: me.email }));
