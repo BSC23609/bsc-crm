@@ -210,7 +210,7 @@ export async function sendReminderEmail(to, g, logoUrl) {
 /* ---------------- Feedback requests (Feedback tab → Customer list) ---------------- */
 // WhatsApp template (create + get approved in WATI, category Utility), name in WATI_FEEDBACK_TEMPLATE (default bsc_feedback_request):
 //   Body: Dear {{company}}, thank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback on invoice {{invoice}}.
-//         It takes 2 minutes: {{link}}
+//         It takes 2 minutes: {{link}} Thank you.
 export async function sendFeedbackWhatsApp(phone, f) {
   return watiTemplate(phone, env('WATI_FEEDBACK_TEMPLATE', 'bsc_feedback_request'), { company: f.company, invoice: f.invoice || '-', link: f.link }, 'crm_fb');
 }

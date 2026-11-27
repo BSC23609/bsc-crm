@@ -156,7 +156,7 @@ Amounts and contacts are read fresh from the receivables file when sending, neve
 - **Email** from info@bharatsteels.in with a button and the QR code.
 - **WhatsApp** through WATI using a template. Create it in WATI, category **Utility**, name `bsc_feedback_request` (or set `WATI_FEEDBACK_TEMPLATE`), with this body:
 
-  > Dear {{company}}, thank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback on invoice {{invoice}}. It takes 2 minutes: {{link}}
+  > Dear {{company}}, thank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback on invoice {{invoice}}. It takes 2 minutes: {{link}} Thank you.
 
   Sample values: company `ABC Steels Pvt Ltd`, invoice `BSC/5101`, link `https://crm.bharatsteels.in/feedback?inv=BSC%2F5101`.
 
