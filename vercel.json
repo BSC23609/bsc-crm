@@ -68,6 +68,9 @@
     },
     "api/customers.js": {
       "maxDuration": 300
+    },
+    "api/feedback.js": {
+      "maxDuration": 300
     }
   }
 }

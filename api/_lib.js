@@ -268,6 +268,12 @@ export function ensureSchema() {
     )`;
     await sql`CREATE INDEX IF NOT EXISTS crm_party_gstin ON crm_mail_party(gstin)`;
     await sql`CREATE INDEX IF NOT EXISTS crm_party_domain ON crm_mail_party(domain)`;
+    // Feedback requests sent from the Feedback tab (customer list)
+    await sql`CREATE TABLE IF NOT EXISTS crm_fb_requests (
+      id SERIAL PRIMARY KEY, card_code TEXT NOT NULL, company TEXT, invoice_no TEXT, link TEXT, phone TEXT, email TEXT,
+      wa_ok BOOLEAN, email_ok BOOLEAN, detail JSONB, sent_by TEXT, sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_fbreq_card ON crm_fb_requests(card_code, sent_at DESC)`;
     // Payment reminders sent from the Receivables tab
     await sql`CREATE TABLE IF NOT EXISTS crm_ar_reminders (
       id SERIAL PRIMARY KEY, card_code TEXT NOT NULL, company TEXT, amount NUMERIC(16,2), overdue NUMERIC(16,2), bills INT,

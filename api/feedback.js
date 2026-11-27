@@ -1,7 +1,8 @@
 // Customer feedback form (same 9 questions as the Microsoft Form).
-// Public: options | submit        Staff: list | update | relink | import | delete
+// Public: options | submit        Staff: list | customers | update | relink | import | delete | send
 import { route, send, readBody, getSql, needUser, audit, loadConfig, clientIp, rateLimit, fail, FEEDBACK_QS, scoreOf, clean, cleanMulti, isAdmin, canEdit } from './_lib.js';
 import { invoiceLookup } from './_sap.js';
+import { sendFeedbackWhatsApp, sendFeedbackEmail, appUrl } from './_notify.js';
 
 // Find the SAP invoice for the number the customer typed (from the SAP data pushed every 15 min).
 async function lookupInvoice(no) {
@@ -96,7 +97,54 @@ export default route(async (req, res) => {
     return send(res, 200, { rows, questions: FEEDBACK_QS, discountPerTon: cfg.discountPerTon, lowScore: cfg.lowScore });
   }
 
+
+  if (b.action === 'customers') {   // customers invoiced in the period: quantity, value, last invoice, last feedback, last request
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(b.from || '')) ? b.from : '2000-01-01';
+    const rows = await sql`WITH inv AS (
+        SELECT card_code, COUNT(*)::int AS invoices, COALESCE(SUM((data->>'Qty')::numeric), 0)::float AS qty,
+               COALESCE(SUM((data->>'DocTotal')::numeric - COALESCE((data->>'VatSum')::numeric, 0)), 0)::float AS value,
+               MAX(doc_date) AS last_date,
+               (ARRAY_AGG(COALESCE(data->>'InvoiceNo', data->>'DocNum') ORDER BY doc_date DESC, (data->>'DocEntry')::int DESC))[1] AS last_inv,
+               (ARRAY_AGG(data->>'SlpName' ORDER BY doc_date DESC))[1] AS inv_slp
+        FROM crm_sap WHERE section = 'invoices' AND card_code IS NOT NULL AND doc_date >= ${from}::date AND COALESCE(data->>'CANCELED', 'N') <> 'Y'
+        GROUP BY card_code)
+      SELECT i.*, c.name, c.phone, c.email, c.slp_name, c.data->>'Cellular' AS mobile, c.data->>'CntctPrsn' AS contact,
+        (SELECT MAX(created_at) FROM crm_feedback f WHERE f.card_code = i.card_code) AS last_feedback,
+        (SELECT score::float FROM crm_feedback f WHERE f.card_code = i.card_code ORDER BY created_at DESC LIMIT 1) AS last_score,
+        (SELECT row_to_json(r) FROM (SELECT sent_at, sent_by, wa_ok, email_ok, invoice_no FROM crm_fb_requests q WHERE q.card_code = i.card_code ORDER BY sent_at DESC LIMIT 1) r) AS last_request
+      FROM inv i LEFT JOIN crm_customers c ON c.card_code = i.card_code ORDER BY i.qty DESC`;
+    return send(res, 200, { rows });
+  }
+
   if (!canEdit(me)) throw fail(403, 'You have view-only access');
+
+  if (b.action === 'send') {   // feedback form link (with the latest invoice filled in) by WhatsApp + email
+    const codes = [...new Set((Array.isArray(b.codes) ? b.codes : []).map(c => clean(c, 40)).filter(Boolean))].slice(0, 150);
+    if (!codes.length) return send(res, 400, { error: 'Select at least one customer' });
+    const base = appUrl(), logo = base + '/img/bsc-logo.png';
+    const one = async code => {
+      const [c] = await sql`SELECT card_code, name, phone, email, data FROM crm_customers WHERE card_code = ${code}`;
+      if (!c) return { code, ok: false, message: 'Not an SAP customer' };
+      const [inv] = await sql`SELECT COALESCE(data->>'InvoiceNo', data->>'DocNum') AS no FROM crm_sap WHERE section = 'invoices' AND card_code = ${code}
+        AND COALESCE(data->>'CANCELED', 'N') <> 'Y' ORDER BY doc_date DESC, (data->>'DocEntry')::int DESC LIMIT 1`;
+      const invoice = inv?.no || '';
+      const f = { company: c.name, invoice, link: base + '/feedback' + (invoice ? '?inv=' + encodeURIComponent(invoice) : '') };
+      const phone = [c.data?.Cellular, c.phone, c.data?.Phone1, c.data?.Phone2].find(p => String(p || '').replace(/\D/g, '').length >= 10) || '';
+      const email = c.email || c.data?.E_Mail || '';
+      const [wa, em] = await Promise.all([b.whatsapp === false ? null : sendFeedbackWhatsApp(phone, f), b.email === false ? null : sendFeedbackEmail(email, f, logo)]);
+      await sql`INSERT INTO crm_fb_requests (card_code, company, invoice_no, link, phone, email, wa_ok, email_ok, detail, sent_by)
+        VALUES (${code}, ${c.name}, ${invoice || null}, ${f.link}, ${phone || null}, ${email || null}, ${wa ? wa.ok : null}, ${em ? em.ok : null},
+                ${JSON.stringify({ wa: wa?.message, email: em?.message })}::jsonb, ${me.email})`;
+      if (wa?.ok || em?.ok) await sql`INSERT INTO crm_activities (card_code, type, subject, notes, done, owner_email, created_by)
+        VALUES (${code}, ${wa?.ok ? 'whatsapp' : 'email'}, ${'Feedback form sent' + (invoice ? ' – invoice ' + invoice : '')}, ${[wa?.message, em?.message].filter(Boolean).join('\n')}, true, ${me.email}, ${me.email})`;
+      return { code, company: c.name, invoice, ok: !!(wa?.ok || em?.ok), wa, email: em };
+    };
+    const results = [];
+    for (let i = 0; i < codes.length; i += 4) results.push(...await Promise.all(codes.slice(i, i + 4).map(c => one(c).catch(e => ({ code: c, ok: false, message: e.message })))));
+    await audit(me.email, 'feedback_send', { n: codes.length, ok: results.filter(r => r.ok).length });
+    return send(res, 200, { results });
+  }
+
 
   if (b.action === 'update') {
     const id = Number(b.id);

@@ -150,6 +150,18 @@ The first run of 90 days of mail takes a few runs (about 100–150 mails a run);
 
 Amounts and contacts are read fresh from the receivables file when sending, never from the screen. The mobile and email are the ones in SAP. Every reminder is logged: "Sent <date>" on the row, an activity on the customer page, and the admin activity log. Optional: `AR_REMINDER_CC` (copy every reminder email to e.g. accounts@bharatsteels.in) and `AR_REMINDER_REPLY_TO`.
 
+### 9. Feedback requests (Feedback tab → Customer list)
+
+**Customer list** shows every customer invoiced in the selected period, with invoices, quantity (sortable, like every column), value, last invoice, last feedback and when the form was last sent. **Send** on a row, or **Send feedback** (choose several), sends the feedback form link with that customer's latest invoice number already filled in:
+- **Email** from info@bharatsteels.in with a button and the QR code.
+- **WhatsApp** through WATI using a template. Create it in WATI, category **Utility**, name `bsc_feedback_request` (or set `WATI_FEEDBACK_TEMPLATE`), with this body:
+
+  > Dear {{company}}, thank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback on invoice {{invoice}}. It takes 2 minutes: {{link}}
+
+  Sample values: company `ABC Steels Pvt Ltd`, invoice `BSC/5101`, link `https://crm.bharatsteels.in/feedback?inv=BSC%2F5101`.
+
+Every send is logged on the row ("Feedback sent") and as an activity on the customer page.
+
 ## Files
 
 ```

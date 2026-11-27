@@ -1098,7 +1098,58 @@ const fbStatusChip = s => `<span class="chip ${FB_C[s]?.[1] || ''}">${FB_C[s]?.[
 const DISC = { eligible: ['Discount due', 'warn'], applied: ['Discount given', 'ok'], na: ['No discount', ''] };
 const discChip = s => `<span class="chip ${DISC[s]?.[1] || ''}">${DISC[s]?.[0] || esc(s)}</span>`;
 const DIV = ['#1b64be', '#84b9f3', '#d4d7dd', '#f0908f', '#dc3c3d'];   // 5 → 1 : blue = good, grey = neutral, red = poor
-const FBF = { period: '90', slp: '', tab: 'analytics', st: 'followup' };
+const FBF = { period: '90', slp: '', tab: 'analytics', st: 'followup', sort: 'qty', dir: -1, q: '' };
+// Send the feedback form (link + QR, latest invoice filled in) by WhatsApp and email. pre: codes ticked at start.
+function fbSendModal(rows, pre, done) {
+  const sel = new Set(pre), one = pre.length === 1 ? rows.find(r => r.card_code === pre[0]) : null;
+  const waOk = S.meta.whatsappReady, emOk = S.meta.emailReady;
+  const contact = r => ({ mob: [r.mobile, r.phone].find(p => String(p || '').replace(/\D/g, '').length >= 10) || '', em: r.email || '' });
+  modal(`<h2>${one ? 'Send feedback form' : 'Send feedback forms'}</h2>
+    <p class="small muted" style="margin-top:-8px">Sends each company the feedback form link and QR code by WhatsApp and by email from info@bharatsteels.in, with their latest invoice number already filled in.</p>
+    ${one ? `<div class="card" style="margin:0 0 10px;padding:12px 14px"><b>${esc(one.name)}</b> <span class="muted small">${esc(one.card_code)}</span>
+        <div style="margin-top:4px">Latest invoice <b>${esc(one.last_inv || '—')}</b> (${fdate(one.last_date)}) · ${mt(one.qty)} in this period</div>
+        <div class="small muted" style="margin-top:4px">💬 ${esc(contact(one).mob || 'no mobile')} · ✉️ ${esc(contact(one).em || 'no email')}</div>
+        ${one.last_request ? `<div class="small" style="margin-top:4px;color:var(--warn)">Already sent on ${fdate(one.last_request.sent_at)}</div>` : ''}</div>`
+      : `<div class="toolbar" style="margin:0 0 6px"><input type="search" id="fq" placeholder="Search company"><label class="small nowrap"><input type="checkbox" id="fNotSent"> Not sent in last 30 days</label><button class="btn sm sec" id="fAll">Select all shown</button><button class="btn sm sec" id="fNone">Clear</button><span class="sp"></span><b id="fCount"></b></div>
+        <div class="tw" style="max-height:340px"><table id="fList"></table></div>`}
+    <div class="f" style="margin-top:10px"><label>Send by</label>
+      <label style="display:inline-block;margin-right:18px;font-weight:500;color:var(--ink)"><input type="checkbox" id="fWA" ${waOk ? 'checked' : 'disabled'}> WhatsApp${waOk ? '' : ' (WATI not set up)'}</label>
+      <label style="display:inline-block;font-weight:500;color:var(--ink)"><input type="checkbox" id="fEM" ${emOk ? 'checked' : 'disabled'}> Email${emOk ? '' : ' (SMTP not set up)'}</label></div>
+    <div class="err" id="fErr"></div><div id="fOut"></div>
+    <div class="acts"><button class="btn sec" onclick="closeModal()">Close</button><button class="btn" id="fGo">Send</button></div>`, one ? '' : 'wide');
+  const list = () => {
+    if (one) return;
+    const q = norm($('#fq').value).trim(), ns = $('#fNotSent').checked, cut = addDays(today(), -30);
+    const shown = rows.filter(r => (!q || norm(r.name).includes(q) || norm(r.card_code).includes(q)) && (!ns || !r.last_request || d10(r.last_request.sent_at) < cut));
+    $('#fList').innerHTML = `<tr><th></th><th>Company</th><th class="n">Quantity</th><th>Latest invoice</th><th>Mobile / email</th><th>Last sent</th></tr>` + shown.map(r => { const c = contact(r); return `<tr>
+      <td><input type="checkbox" data-fc="${esc(r.card_code)}" ${sel.has(r.card_code) ? 'checked' : ''} ${c.mob || c.em ? '' : 'disabled'}></td>
+      <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.card_code)} · ${esc(r.slp_name || r.inv_slp || '')}</div></td><td class="n">${mt(r.qty)}</td>
+      <td class="small">${esc(r.last_inv || '')}<div class="muted">${fdate(r.last_date)}</div></td>
+      <td class="small">${c.mob ? '💬 ' + esc(c.mob) : '<span class="muted">no mobile</span>'}<br>${c.em ? '✉️ ' + esc(c.em) : '<span class="muted">no email</span>'}</td>
+      <td class="small">${r.last_request ? fdate(r.last_request.sent_at) : '—'}</td></tr>`; }).join('');
+    $$('[data-fc]').forEach(c => c.onchange = () => { c.checked ? sel.add(c.dataset.fc) : sel.delete(c.dataset.fc); count(); });
+    $('#fAll').onclick = () => { shown.forEach(r => { const c = contact(r); if (c.mob || c.em) sel.add(r.card_code); }); list(); };
+    count();
+  };
+  const count = () => { if (!one) $('#fCount').textContent = `${sel.size} selected`; };
+  if (!one) { $('#fq').oninput = list; $('#fNotSent').onchange = list; $('#fNone').onclick = () => { sel.clear(); list(); }; list(); }
+  $('#fGo').onclick = async () => {
+    const wa = $('#fWA').checked, em = $('#fEM').checked;
+    if (!sel.size) { $('#fErr').textContent = 'Select at least one company'; return; }
+    if (!wa && !em) { $('#fErr').textContent = 'Tick WhatsApp or Email'; return; }
+    if (sel.size > 1 && !confirm(`Send the feedback form to ${sel.size} companies?`)) return;
+    $('#fGo').disabled = true; $('#fGo').textContent = `Sending to ${sel.size}…`; $('#fErr').textContent = '';
+    try {
+      const r = await api('/api/feedback', { action: 'send', codes: [...sel], whatsapp: wa, email: em });
+      const okN = r.results.filter(x => x.ok).length;
+      $('#fGo').remove();
+      $('#fOut').innerHTML = `<div class="banner ${okN === r.results.length ? 'ok' : okN ? 'warn' : 'bad'}" style="margin:8px 0">Sent to ${okN} of ${r.results.length} compan${r.results.length === 1 ? 'y' : 'ies'}.</div>
+        <div class="tw" style="max-height:260px"><table class="small">${r.results.map(x => `<tr><td><b>${esc(x.company || x.code)}</b>${x.invoice ? `<div class="muted">invoice ${esc(x.invoice)}</div>` : ''}</td>
+          <td>${x.message ? `<span style="color:var(--bad)">${esc(x.message)}</span>` : [x.wa, x.email].filter(Boolean).map(m => `<div style="color:${m.ok ? 'var(--ok)' : 'var(--bad)'}">${m.ok ? '✓' : '✗'} ${esc(m.message)}</div>`).join('')}</td></tr>`).join('')}</table></div>`;
+      done && done();
+    } catch (e) { $('#fErr').textContent = e.message; $('#fGo').disabled = false; $('#fGo').textContent = 'Send'; }
+  };
+}
 async function viewFeedback() {
   loading();
   const d = await api('/api/feedback', { action: 'list' }); S.cache.fb = d;
@@ -1115,14 +1166,17 @@ async function viewFeedback() {
   const open = d.rows.filter(r => r.status === 'followup'), discDue = d.rows.filter(r => r.discount === 'eligible');
   $('#main').innerHTML = `<h1 class="pg">Customer feedback</h1><p class="pgsub">Responses to the feedback form, matched to the SAP invoice and customer.</p>
     <div class="card">${shareBox(origin() + '/feedback', 'Public feedback form link', fbText())}<p class="small muted" style="margin:10px 0 0">Tip: add <code>?inv=INVOICE-NO</code> to the link (the customer page does this for you) so the invoice number is filled in. Put the QR on invoices / delivery challans.</p></div>
-    <div class="toolbar"><div class="seg">${[['analytics', 'Analytics'], ['responses', 'Responses']].map(([k, l]) => `<button data-tab="${k}" class="${FBF.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="toolbar"><div class="seg">${[['customers', 'Customer list'], ['analytics', 'Analytics'], ['responses', 'Responses']].map(([k, l]) => `<button data-tab="${k}" class="${FBF.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <select id="fbP">${opts([['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 6 months'], ['365', 'Last 12 months'], ['fy', 'This financial year'], ['all', 'All time']], FBF.period, null)}</select>
       <select id="fbS">${opts(slps, FBF.slp, 'All salespersons')}</select><span class="sp"></span>
-      ${canEdit() ? '<button class="btn sec" id="fbRel">Re-match invoices</button><button class="btn sec" id="fbImp">Import Microsoft Forms</button>' : ''}<button class="btn sec" id="fbXl">Export Excel</button></div>
+      ${canEdit() ? '<button class="btn" id="fbSend">📨 Send feedback</button><button class="btn sec" id="fbRel">Re-match invoices</button><button class="btn sec" id="fbImp">Import Microsoft Forms</button>' : ''}<button class="btn sec" id="fbXl">Export Excel</button></div>
     <div id="fbBody"></div>`;
   $$('[data-tab]').forEach(b => b.onclick = () => { FBF.tab = b.dataset.tab; viewFeedback(); });
   $('#fbP').onchange = e => { FBF.period = e.target.value; viewFeedback(); };
   $('#fbS').onchange = e => { FBF.slp = e.target.value; viewFeedback(); };
+  let custRows = null;
+  const loadCust = async () => { if (!custRows) custRows = (await api('/api/feedback', { action: 'customers', from: from === '0000' ? '2000-01-01' : from })).rows.filter(r => !FBF.slp || (r.slp_name || r.inv_slp) === FBF.slp); return custRows; };
+  if ($('#fbSend')) $('#fbSend').onclick = async () => fbSendModal(await loadCust(), [], () => { custRows = null; if (FBF.tab === 'customers') viewFeedback(); });
   if ($('#fbRel')) $('#fbRel').onclick = async () => { const r = await api('/api/feedback', { action: 'relink' }); toast(`${r.linked} of ${r.checked} unmatched responses matched to SAP`); viewFeedback(); };
   if ($('#fbImp')) $('#fbImp').onclick = () => importModal('Import Microsoft Forms responses', 'In Microsoft Forms open the form → Responses → Open results in Excel, save it, and upload the .xlsx here. Already-imported rows are skipped. Imported responses older than 90 days are marked “no discount”.', async t => {
     const r = await api('/api/feedback', { action: 'import', headers: t.headers, rows: t.rows }); return `${r.added} added, ${r.skipped} skipped.`; }, viewFeedback);
@@ -1132,6 +1186,33 @@ async function viewFeedback() {
     { h: 'Average', k: 'score', fmt: 'num', w: 9 }, { h: 'Comment', k: 'comment', w: 40 }, { h: 'Status', v: r => FB_C[r.status]?.[0], w: 14 }, { h: 'Action taken', k: 'action_note', w: 30 },
     { h: 'Discount', v: r => DISC[r.discount]?.[0], w: 13 }, { h: 'Discount note', k: 'discount_note', w: 24 }, { h: 'Source', k: 'source', w: 8 }], rows, `Bharat Steel (Chennai) Pvt. Ltd. — Customer feedback — ${fdate(today())}`);
 
+  if (FBF.tab === 'customers') {
+    const all = await loadCust();
+    const cols = [['name', 'Customer'], ['slp', 'Salesperson'], ['invoices', 'Invoices', 1], ['qty', 'Quantity', 1], ['value', 'Value (ex-GST)', 1], ['last_date', 'Last invoice'], ['last_feedback', 'Last feedback'], ['req', 'Feedback sent']];
+    const key = { name: r => r.name || r.card_code, slp: r => r.slp_name || r.inv_slp || '', invoices: r => r.invoices, qty: r => r.qty, value: r => r.value, last_date: r => r.last_date || '',
+      last_feedback: r => r.last_feedback || '', req: r => r.last_request?.sent_at || '' };
+    const drawCust = () => {
+      const q = norm(FBF.q).trim(), k = key[FBF.sort] || key.qty;
+      const list = all.filter(r => !q || [r.name, r.card_code, r.slp_name, r.last_inv].some(v => norm(v).includes(q)))
+        .sort((a, b) => { const x = k(a), y = k(b); return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y))) * FBF.dir; });
+      const tq = list.reduce((a, r) => a + r.qty, 0);
+      $('#fbCust').innerHTML = `<div class="tw">${list.length ? `<table><tr>${cols.map(([c, l, n]) => `<th class="${n ? 'n ' : ''}sortable" data-srt="${c}" style="cursor:pointer;user-select:none">${l}${FBF.sort === c ? (FBF.dir < 0 ? ' ▼' : ' ▲') : ' <span class="muted">↕</span>'}</th>`).join('')}<th>Send feedback</th></tr>
+        ${list.map(r => { const rq = r.last_request; return `<tr><td><a href="#/c/${encodeURIComponent(r.card_code)}"><b>${esc(r.name || r.card_code)}</b></a><div class="small muted">${esc(r.card_code)}</div></td>
+          <td>${esc(r.slp_name || r.inv_slp || '')}</td><td class="n">${r.invoices}</td><td class="n b">${mt(r.qty)}</td><td class="n">${inrShort(r.value)}</td>
+          <td class="nowrap">${fdate(r.last_date)}<div class="small muted">${esc(r.last_inv || '')}</div></td>
+          <td class="nowrap">${r.last_feedback ? `${fdate(r.last_feedback)}<div class="small muted">score ${num(r.last_score).toFixed(1)}</div>` : '<span class="muted">—</span>'}</td>
+          <td class="nowrap small">${rq ? `<span data-tip="${esc(`By ${rq.sent_by || ''}<br>WhatsApp: ${rq.wa_ok == null ? 'not sent' : rq.wa_ok ? 'sent' : 'failed'}<br>Email: ${rq.email_ok == null ? 'not sent' : rq.email_ok ? 'sent' : 'failed'}`)}">${fdate(rq.sent_at)} ${rq.wa_ok ? '💬' : ''}${rq.email_ok ? '✉️' : ''}${rq.wa_ok === false || rq.email_ok === false ? ' ⚠️' : ''}</span>` : '<span class="muted">—</span>'}</td>
+          <td>${canEdit() ? `<button class="btn sm" data-fbsend="${esc(r.card_code)}">📨 Send</button>` : ''}</td></tr>`; }).join('')}
+        <tr style="font-weight:600;background:#f8fafc"><td>Total (${list.length} customers)</td><td></td><td class="n">${list.reduce((a, r) => a + r.invoices, 0)}</td><td class="n">${mt(tq)}</td><td class="n">${inrShort(list.reduce((a, r) => a + r.value, 0))}</td><td colspan="4"></td></tr></table>`
+        : '<div class="empty">No customers invoiced in this period.</div>'}</div>`;
+      $$('[data-srt]').forEach(th => th.onclick = () => { const c = th.dataset.srt; if (FBF.sort === c) FBF.dir = -FBF.dir; else { FBF.sort = c; FBF.dir = ['name', 'slp'].includes(c) ? 1 : -1; } drawCust(); });
+      $$('[data-fbsend]').forEach(b => b.onclick = () => fbSendModal(all, [b.dataset.fbsend], () => { custRows = null; viewFeedback(); }));
+    };
+    $('#fbBody').innerHTML = `<div class="toolbar"><input type="search" id="fbCq" placeholder="Search customer, code, invoice" value="${esc(FBF.q)}"><span class="sp"></span><span class="small muted">Customers invoiced in the selected period · click a column heading to sort</span></div><div id="fbCust"></div>`;
+    $('#fbCq').oninput = e => { FBF.q = e.target.value; drawCust(); };
+    drawCust();
+    return;
+  }
   if (FBF.tab === 'responses') {
     const list = FBF.st === 'all' ? d.rows : FBF.st === 'disc' ? discDue : FBF.st === 'unlinked' ? d.rows.filter(r => !r.card_code) : open;
     $('#fbBody').innerHTML = `<div class="toolbar"><div class="seg">${[['followup', `Needs follow-up (${open.length})`], ['disc', `Discount due (${discDue.length})`], ['unlinked', `Not matched to SAP (${d.rows.filter(r => !r.card_code).length})`], ['all', `All (${d.rows.length})`]].map(([k, l]) => `<button data-st="${k}" class="${FBF.st === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>

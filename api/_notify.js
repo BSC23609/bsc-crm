@@ -206,3 +206,43 @@ export async function sendReminderEmail(to, g, logoUrl) {
     return { ok: false, message: 'Email failed: ' + String(e.message).slice(0, 160) + hint };
   }
 }
+
+/* ---------------- Feedback requests (Feedback tab → Customer list) ---------------- */
+// WhatsApp template (create + get approved in WATI, category Utility), name in WATI_FEEDBACK_TEMPLATE (default bsc_feedback_request):
+//   Body: Dear {{company}}, thank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback on invoice {{invoice}}.
+//         It takes 2 minutes: {{link}}
+export async function sendFeedbackWhatsApp(phone, f) {
+  return watiTemplate(phone, env('WATI_FEEDBACK_TEMPLATE', 'bsc_feedback_request'), { company: f.company, invoice: f.invoice || '-', link: f.link }, 'crm_fb');
+}
+export async function sendFeedbackEmail(to, f, logoUrl) {
+  if (!emailReady()) return { ok: false, message: 'Email is not set up (SMTP_* settings)' };
+  const list = String(to || '').split(/[;,\s]+/).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)).slice(0, 3);
+  if (!list.length) return { ok: false, message: 'No valid email address' };
+  const qr = await qrPng(f.link, 420);
+  const html = `<!doctype html><html><body style="margin:0;background:#F4F6F8;font-family:Arial,Helvetica,sans-serif;color:#1E1D1D">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F6F8;padding:24px 0"><tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden">
+  <tr><td style="height:6px;background:#0A2B66"></td></tr>
+  <tr><td style="padding:22px 28px 6px"><img src="${esc(logoUrl)}" alt="Bharat Steel (Chennai) Pvt. Ltd." height="44" style="display:block;height:44px"></td></tr>
+  <tr><td style="padding:10px 28px 0;font-size:15px;line-height:1.55">
+    <p style="margin:0 0 12px">Dear <b>${esc(f.company)}</b>,</p>
+    <p style="margin:0 0 12px">Thank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback on our material, delivery and service${f.invoice ? ` for invoice <b>${esc(f.invoice)}</b>` : ''}. It takes about 2 minutes and helps us serve you better.</p>
+  </td></tr>
+  <tr><td align="center" style="padding:6px 28px 8px"><a href="${esc(f.link)}" style="display:inline-block;background:#0A2B66;color:#ffffff;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 30px;border-radius:8px">Give feedback</a></td></tr>
+  <tr><td align="center" style="padding:14px 28px 4px"><img src="cid:fbqr" alt="QR code for the feedback form" width="170" height="170" style="display:block;width:170px;height:170px"></td></tr>
+  <tr><td align="center" style="padding:0 28px 18px;font-size:12px;color:#5b6475">Scan with your phone camera, or open: <a href="${esc(f.link)}" style="color:#01578C;word-break:break-all">${esc(f.link)}</a></td></tr>
+  <tr><td style="padding:0 28px 24px;font-size:14px;line-height:1.5">Regards,<br><b>Bharat Steel (Chennai) Pvt. Ltd.</b></td></tr>
+  <tr><td style="background:#F4F6F8;padding:14px 28px;font-size:11.5px;color:#5b6475;line-height:1.5">No.147, Survey No. 133, Thirunilai Village, Ponneri Taluk, Chennai - 600103 · 044 6791 7800 · info@bharatsteels.in · www.bharatsteels.in</td></tr>
+</table></td></tr></table></body></html>`;
+  const text = `Dear ${f.company},\n\nThank you for buying from Bharat Steel (Chennai) Pvt. Ltd. We would value your feedback${f.invoice ? ' on invoice ' + f.invoice : ''}. It takes about 2 minutes:\n${f.link}\n\nRegards,\nBharat Steel (Chennai) Pvt. Ltd.\n044 6791 7800 · info@bharatsteels.in`;
+  try {
+    const from = env('SMTP_FROM', 'info@bharatsteels.in');
+    await mailer().sendMail({ from: { name: env('SMTP_FROM_NAME', 'Bharat Steel (Chennai) Pvt. Ltd.'), address: from }, replyTo: from, to: list,
+      subject: `Your feedback please${f.invoice ? ' – invoice ' + f.invoice : ''} | Bharat Steel (Chennai) Pvt. Ltd.`, text, html,
+      attachments: [{ filename: 'feedback-qr.png', content: qr, cid: 'fbqr' }] });
+    return { ok: true, message: 'Email sent to ' + list.join(', ') };
+  } catch (e) {
+    _tx = null;
+    return { ok: false, message: 'Email failed: ' + String(e.message).slice(0, 160) + (/535|auth/i.test(e.message) ? ' (check SMTP_USER / SMTP_PASS)' : '') };
+  }
+}
