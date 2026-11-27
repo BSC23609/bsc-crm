@@ -37,9 +37,9 @@ function render() {
   if (!O.open) { $('#app').innerHTML = `<div class="banner warn">This form is not accepting responses right now.</div>`; return; }
   if (O.discountPerTon > 0) { $('#promo').classList.remove('hidden'); $('#promo').innerHTML = `As a token of appreciation, customers who complete this form receive an additional <b>discount of Rs.${esc(O.discountPerTon)} per ton</b> on their next purchase with us.`; }
   $('#app').innerHTML = `<form id="F" novalidate>
-    <div class="q" data-k="invoice_no"><label for="f_inv"><span class="n">1.</span>Please enter the Invoice Number for the delivery</label>
+    <div class="q" data-k="invoice_no"><label for="f_inv"><span class="n">1.</span>Please enter the Invoice Number for the delivery <span class="r">*</span></label>
       <input type="text" id="f_inv" name="invoice_no" maxlength="40" value="${esc(INV)}" placeholder="Enter your answer">
-      ${O.discountPerTon > 0 ? '<div class="hint">Needed for the discount on your next purchase.</div>' : ''}</div>
+      ${O.discountPerTon > 0 ? '<div class="hint">Needed for the discount on your next purchase.</div>' : ''}<div class="err" id="e_invoice_no"></div></div>
     ${O.questions.map(q => `<div class="q" data-k="${q.key}"><div class="lbl"><span class="n">${q.n}.</span>${esc(q.text)} ${q.required ? '<span class="r">*</span>' : ''}</div>
       <div class="scale">${q.options.map(o => `<label class="opt"><input type="radio" name="${q.key}" value="${esc(o)}">${esc(o)}</label>`).join('')}</div>
       <div class="err" id="e_${q.key}"></div></div>`).join('')}
@@ -54,6 +54,7 @@ function render() {
 async function submit(ev) {
   ev.preventDefault();
   const F = $('#F'), answers = {}, errors = {};
+  if (!$('#f_inv').value.trim()) errors.invoice_no = 'Please enter the invoice number';
   for (const q of O.questions) { const c = F.querySelector(`input[name=${q.key}]:checked`); if (c) answers[q.key] = c.value; else if (q.required) errors[q.key] = 'This question is required'; }
   document.querySelectorAll('.q.has-err').forEach(q => q.classList.remove('has-err'));
   if (Object.keys(errors).length) {

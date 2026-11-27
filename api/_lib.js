@@ -33,15 +33,15 @@ export const FEEDBACK_QS = [
   { key: 'q_response', n: 4, short: 'Query response', text: 'How satisfied are you with our response to your queries, issues, or complaints?', options: SAT, required: true },
   { key: 'q_comm', n: 5, short: 'Communication', text: 'How clear and timely is our communication with you?', options: RATE5, required: true },
   { key: 'q_relation', n: 6, short: 'Relationship', text: 'How would you rate your overall working relationship with us?', options: RATE5, required: true },
-  { key: 'q_docs', n: 7, short: 'Documentation', text: 'How satisfied are you with the documentation provided (Invoice, DC, Test Certificates, etc.)?', options: SAT, required: false },
-  { key: 'q_pricing', n: 8, short: 'Pricing & terms', text: 'How satisfied are you with our pricing and commercial terms?', options: SAT, required: false }
+  { key: 'q_docs', n: 7, short: 'Documentation', text: 'How satisfied are you with the documentation provided (Invoice, DC, Test Certificates, etc.)?', options: SAT, required: true },
+  { key: 'q_pricing', n: 8, short: 'Pricing & terms', text: 'How satisfied are you with our pricing and commercial terms?', options: SAT, required: true }
 ];
 // First option = 5 points … last option = 1 point.
 export const scoreOf = (q, label) => { const i = q.options.indexOf(label); return i < 0 ? null : 5 - i; };
 
 /* ============================== settings ============================== */
 export const DEFAULT_CFG = {
-  discountPerTon: 50,            // promised in the feedback e-mail: Rs.50 per ton on the next purchase
+  discountPerTon: 100,           // promised on the feedback form: Rs.100 per ton on the next purchase
   lowScore: 2,                   // any answer at or below this score opens a follow-up
   kycOpen: true,                 // public /kyc form accepts responses
   feedbackOpen: true,            // public /feedback form accepts responses
@@ -282,6 +282,9 @@ export function ensureSchema() {
     await sql`CREATE INDEX IF NOT EXISTS crm_ar_rem_card ON crm_ar_reminders(card_code, sent_at DESC)`;
     await sql`CREATE TABLE IF NOT EXISTS crm_mail_state (key TEXT PRIMARY KEY, value TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
     await sql`INSERT INTO crm_config (id, data) VALUES (1, ${JSON.stringify(DEFAULT_CFG)}::jsonb) ON CONFLICT (id) DO NOTHING`;
+    // One-time change (Nov 2026): feedback discount Rs.50 -> Rs.100 per ton. Runs once; later edits in Admin → Settings stay.
+    const [mig] = await sql`INSERT INTO crm_mail_state (key, value) VALUES ('migr_discount_100', 'done') ON CONFLICT (key) DO NOTHING RETURNING key`;
+    if (mig) await sql`UPDATE crm_config SET data = jsonb_set(data, '{discountPerTon}', '100'::jsonb) WHERE id = 1 AND (data->>'discountPerTon')::numeric = 50`;
     const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM crm_users`;
     const em = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
     const pw = process.env.ADMIN_PASSWORD || '';

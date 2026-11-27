@@ -76,6 +76,7 @@ export default route(async (req, res) => {
       else if (v) answers[q.key] = v;
       else if (q.required) errors[q.key] = 'This question is required';
     }
+    if (!clean(b.invoice_no, 40)) errors.invoice_no = 'Please enter the invoice number';
     if (Object.keys(errors).length) return send(res, 400, { error: 'Please answer the required questions', errors });
     const invoiceNo = clean(b.invoice_no, 40);
     const inv = await lookupInvoice(invoiceNo);
