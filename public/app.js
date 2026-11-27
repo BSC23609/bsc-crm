@@ -1200,7 +1200,7 @@ const TRAINER = 'https://trainer.bharatsteels.in';
 const trainerUrl = (path, viaHub = true) => viaHub ? `${(S.hub || 'https://app.thebharatsteelgroup.com').replace(/\/+$/, '')}/launch/sales-trainer?next=${encodeURIComponent(path)}` : TRAINER + path;
 const trainerCard = () => `<div class="card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
   <div style="font-size:30px">🎧</div>
-  <div style="flex:1;min-width:240px"><b>Sales call insights — Bharat Steel</b><div class="small muted">From BSC sales-call recordings: what customers say about price, products and service, and coaching for the sales team. Opens the Sales Trainer app (BSC only).</div></div>
+  <div style="flex:1;min-width:240px"><b>Sales Calls Insights — Bharat Steel</b><div class="small muted">From BSC sales-call recordings: what customers say about price, products and service, and coaching for the sales team. Opens the Sales Trainer app (BSC only).</div></div>
   <a class="btn" target="_blank" rel="noopener" href="${esc(trainerUrl('/insights.html?c=bsc'))}">Customer Insights ↗</a>
   <a class="btn sec" target="_blank" rel="noopener" href="${esc(trainerUrl('/trainer.html?c=bsc'))}">Sales Trainer ↗</a>
   <a class="small" target="_blank" rel="noopener" href="${esc(trainerUrl('/insights.html?c=bsc', false))}" title="If the portal link does not open it, sign in with your Emp No here">direct link</a></div>`;
