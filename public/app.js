@@ -1194,6 +1194,16 @@ function fbSendModal(rows, pre, done) {
     } catch (e) { $('#fErr').textContent = e.message; $('#fGo').disabled = false; $('#fGo').textContent = 'Send'; }
   };
 }
+// Sales Trainer (trainer.bharatsteels.in), BSC side only. Opened through the group hub so it signs in automatically;
+// the direct link is the fallback (Emp No + password there).
+const TRAINER = 'https://trainer.bharatsteels.in';
+const trainerUrl = (path, viaHub = true) => viaHub ? `${(S.hub || 'https://app.thebharatsteelgroup.com').replace(/\/+$/, '')}/launch/sales-trainer?next=${encodeURIComponent(path)}` : TRAINER + path;
+const trainerCard = () => `<div class="card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+  <div style="font-size:30px">🎧</div>
+  <div style="flex:1;min-width:240px"><b>Sales call insights — Bharat Steel</b><div class="small muted">From BSC sales-call recordings: what customers say about price, products and service, and coaching for the sales team. Opens the Sales Trainer app (BSC only).</div></div>
+  <a class="btn" target="_blank" rel="noopener" href="${esc(trainerUrl('/insights.html?c=bsc'))}">Customer Insights ↗</a>
+  <a class="btn sec" target="_blank" rel="noopener" href="${esc(trainerUrl('/trainer.html?c=bsc'))}">Sales Trainer ↗</a>
+  <a class="small" target="_blank" rel="noopener" href="${esc(trainerUrl('/insights.html?c=bsc', false))}" title="If the portal link does not open it, sign in with your Emp No here">direct link</a></div>`;
 async function viewFeedback() {
   loading();
   const d = await api('/api/feedback', { action: 'list' }); S.cache.fb = d;
@@ -1210,6 +1220,7 @@ async function viewFeedback() {
   const open = d.rows.filter(r => r.status === 'followup'), discDue = d.rows.filter(r => r.discount === 'eligible');
   $('#main').innerHTML = `<h1 class="pg">Customer feedback</h1><p class="pgsub">Responses to the feedback form, matched to the SAP invoice and customer.</p>
     <div class="card">${shareBox(origin() + '/feedback', 'Public feedback form link', fbText())}<p class="small muted" style="margin:10px 0 0">Tip: add <code>?inv=INVOICE-NO</code> to the link (the customer page does this for you) so the invoice number is filled in. Put the QR on invoices / delivery challans.</p></div>
+    ${trainerCard()}
     <div class="toolbar"><div class="seg">${[['customers', 'Customer list'], ['analytics', 'Analytics'], ['responses', 'Responses']].map(([k, l]) => `<button data-tab="${k}" class="${FBF.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <select id="fbP">${opts([['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 6 months'], ['365', 'Last 12 months'], ['fy', 'This financial year'], ['all', 'All time']], FBF.period, null)}</select>
       <select id="fbS">${opts(slps, FBF.slp, 'All salespersons')}</select><span class="sp"></span>
@@ -1397,6 +1408,7 @@ async function viewAdmin() {
 (async () => {
   try {
     const d = await api('/api/auth', { action: 'me' }); S.hub = d.hub;
+    const nc = document.getElementById('navCalls'); if (nc) nc.href = trainerUrl('/insights.html?c=bsc');
     if (d.user) { S.me = d.user; d.user.must_change ? showChange() : start(); } else showLogin();
   } catch (e) { showLogin(e.message); }
 })();
