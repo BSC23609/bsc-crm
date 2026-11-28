@@ -133,17 +133,24 @@ const extType = n => ({ pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/
 
 /* ---------------- SAP matching ---------------- */
 const STOP = new Set(['m', 's', 'ms', 'the', 'pvt', 'private', 'ltd', 'limited', 'llp', 'co', 'company', 'and', 'india', 'inc', 'corp', 'corporation', 'opc']);
-export const normName = s => String(s || '').toLowerCase().replace(/m\/s\.?/g, ' ').replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w && !STOP.has(w)).join(' ');
+const ABBR = { engg: 'engineering', eng: 'engineering', engineerings: 'engineering', inds: 'industries', ind: 'industries', industry: 'industries', ent: 'enterprises', enterprise: 'enterprises',
+  mfg: 'manufacturing', mfrs: 'manufacturers', fab: 'fabricators', fabs: 'fabricators', fabrication: 'fabricators', fabricator: 'fabricators', intl: 'international', bros: 'brothers', tech: 'technologies',
+  technology: 'technologies', sys: 'systems', svcs: 'services', service: 'services', steels: 'steel', structurals: 'structural', works: 'works', wks: 'works' };
+export const normName = s => String(s || '').toLowerCase().replace(/m\/s\.?/g, ' ').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').split(' ')
+  .filter(w => w && !STOP.has(w)).map(w => ABBR[w] || w).join(' ');
 const p10 = v => { const d = phoneDigits(v); return d.length >= 10 ? d.slice(-10) : ''; };
 const splitEmails = v => String(v || '').toLowerCase().split(/[;,\s]+/).filter(e => e.includes('@'));
 export async function loadMatcher(sql) {
   const cust = await sql`SELECT card_code, name, gstin, phone, email, data FROM crm_customers WHERE in_sap`;
   const extra = await sql`SELECT section, card_code, data FROM crm_sap WHERE section IN ('contacts', 'addresses') AND card_code IS NOT NULL`;
-  const M = { gst: new Map(), email: new Map(), domain: new Map(), phone: new Map(), name: new Map(), names: [], byCode: new Map() };
+  const M = { gst: new Map(), email: new Map(), domain: new Map(), phone: new Map(), name: new Map(), names: [], byCode: new Map(), place: new Map() };
+  const addPlace = (code, city, zip) => { const p = M.place.get(code) || { cities: new Set(), pins: new Set() };
+    const c = normName(city); if (c) p.cities.add(c); const z = String(zip || '').match(/[1-9][0-9]{5}/); if (z) p.pins.add(z[0]); M.place.set(code, p); };
   const addSet = (map, k, code) => { if (!k) return; if (!map.has(k)) map.set(k, new Set()); map.get(k).add(code); };
   const addEmail = (e, code) => { for (const x of splitEmails(e)) { if (!M.email.has(x)) M.email.set(x, code); const d = domainOf(x); if (d && !FREE_MAIL.has(d) && !isOwn(d)) addSet(M.domain, d, code); } };
   for (const c of cust) {
     M.byCode.set(c.card_code, c.name);
+    addPlace(c.card_code, c.data?.City, c.data?.ZipCode); addPlace(c.card_code, c.data?.BillCity, null);
     if (c.gstin) M.gst.set(c.gstin.toUpperCase(), c.card_code);
     addEmail(c.email, c.card_code); addEmail(c.data?.E_Mail, c.card_code);
     for (const p of [c.phone, c.data?.Phone1, c.data?.Phone2, c.data?.Cellular]) { const k = p10(p); if (k && !OWN_PHONES.includes(k)) addSet(M.phone, k, c.card_code); }
@@ -151,6 +158,7 @@ export async function loadMatcher(sql) {
   }
   for (const r of extra) {
     if (r.section === 'addresses' && r.data?.GSTIN) { const g = String(r.data.GSTIN).toUpperCase().trim(); if (g && !M.gst.has(g)) M.gst.set(g, r.card_code); }
+    if (r.section === 'addresses') addPlace(r.card_code, r.data?.City, r.data?.ZipCode);
     if (r.section === 'contacts') { addEmail(r.data?.Email, r.card_code); for (const p of [r.data?.Mobile, r.data?.Tel1]) { const k = p10(p); if (k && !OWN_PHONES.includes(k)) addSet(M.phone, k, r.card_code); } }
   }
   return M;
@@ -163,11 +171,18 @@ export function matchSap(M, x) {
   for (const e of x.emails || []) if (M.email.has(e)) return { status: 'existing', code: M.email.get(e), basis: 'email address' };
   for (const p of x.phones || []) { const c = one(M.phone.get(p)); if (c) return { status: 'existing', code: c, basis: 'phone number' }; }
   if (x.domain) { const s = M.domain.get(x.domain); if (s && s.size === 1) return { status: 'existing', code: [...s][0], basis: 'email domain' }; if (s) return { status: 'possible', suggest: [...s][0], basis: 'same email domain as ' + s.size + ' SAP customers' }; }
-  const n = normName(x.company);
+  const cityWords = new Set(normName(x.city).split(' ').filter(Boolean));
+  const n = normName(x.company).split(' ').filter(w => !cityWords.has(w)).join(' ');
+  const pin = (String(x.pincode || '').match(/[1-9][0-9]{5}/) || [''])[0], city = normName(x.city);
+  const samePlace = code => { const p = M.place.get(code); return !!p && ((pin && p.pins.has(pin)) || (city && p.cities.has(city))); };
   if (n) {
-    const c = one(M.name.get(n)); if (c) return { status: 'existing', code: c, basis: 'company name' };
-    let best = null; if (n.split(' ').length >= 1) for (const [nn, code] of M.names) { const j = jaccard(n, nn); if (j >= 0.6 && (!best || j > best.j)) best = { j, code }; }
-    if (best) return { status: 'possible', suggest: best.code, basis: `similar name (${Math.round(best.j * 100)}%)` };
+    const exact = M.name.get(n);
+    if (exact && exact.size === 1) { const c = [...exact][0]; return { status: 'existing', code: c, basis: samePlace(c) ? 'company name + address' : 'company name' }; }
+    if (exact && exact.size > 1) { const here = [...exact].filter(samePlace); if (here.length === 1) return { status: 'existing', code: here[0], basis: 'company name + address' };
+      return { status: 'possible', suggest: [...exact][0], basis: `same name as ${exact.size} SAP customers — check the address` }; }
+    let best = null; for (const [nn, code] of M.names) { const j = jaccard(n, nn) + (samePlace(code) ? 0.15 : 0); if (j >= 0.6 && (!best || j > best.j)) best = { j, code }; }
+    if (best) return best.j >= 0.9 && samePlace(best.code) ? { status: 'existing', code: best.code, basis: 'similar name + same address' }
+      : { status: 'possible', suggest: best.code, basis: `similar name${samePlace(best.code) ? ' + same city/pincode' : ''} (${Math.round(Math.min(1, best.j) * 100)}%)` };
   }
   for (const p of x.phones || []) { const s = M.phone.get(p); if (s && s.size > 1) return { status: 'possible', suggest: [...s][0], basis: 'phone shared by several SAP customers' }; }
   return { status: 'new' };
@@ -359,4 +374,17 @@ export async function mailStatus(sql) {
   const k = Object.fromEntries(rows.map(r => [r.key, r]));
   let last = null; try { last = k.last_run ? JSON.parse(k.last_run.value) : null; } catch { /* */ }
   return { ...mailReady(), cursor: k.cursor?.value || null, last, running: !!k.lock };
+}
+
+/* ---------------- SAP check for leads / enquiries (cached matcher) ---------------- */
+let _m = null;
+export async function sapCheck(sql, x) {
+  if (!_m || Date.now() - _m.at > 300000) _m = { at: Date.now(), M: await loadMatcher(sql) };
+  const emails = String(x.email || '').toLowerCase().split(/[;,\s]+/).filter(e => e.includes('@'));
+  const dom = emails.map(e => e.split('@')[1]).find(d => d && !FREE_MAIL.has(d)) || '';
+  const g = String(x.gstin || '').toUpperCase().replace(/\s/g, '');
+  const phones = [x.phone, x.mobile].map(p => { const d = phoneDigits(p); return d.length >= 10 ? d.slice(-10) : ''; }).filter(Boolean);
+  const m = matchSap(_m.M, { gstin: g, emails, phones, company: x.company, domain: dom, city: x.city, pincode: x.pincode });
+  const code = m.code || m.suggest;
+  return { ...m, name: code ? _m.M.byCode.get(code) || null : null };
 }

@@ -15,6 +15,7 @@
 | **Leads** | Pipeline board (New → Contacted → Quoted → Negotiation → Won / Lost) with MT/month potential, lost reasons, activity, and "send ledger form" when won |
 | **Receivables** | Open invoices from the same `receivables.csv` the MIS portal uses: ageing, overdue / over-60 totals, by executive, per-customer bills, WhatsApp payment reminder, log a payment call, Excel export |
 | **Mail** | info@bharatsteels.in read by Claude every 15 min: customer mails only, one data sheet per company (contact, phones, GSTIN, address, requirement), checked against SAP (In SAP / Check match / New), one-click lead or ledger form, Excel export, full log of every mail (section 7) |
+| **Enquiries** | Purchase enquiries with product lines, source, owner and transfer (WhatsApp to the new owner), SAP check, follow-up date + time with WhatsApp reminder, Excel export (section 10) |
 | **Admin** | Users & roles (Admin / Sales / Viewer), link users to their SAP sales employee, settings (discount, low-score level, dormant days, lead sources, products), activity log |
 
 SAP is **read-only** from the CRM — nothing is written to SAP.
@@ -162,6 +163,25 @@ Amounts and contacts are read fresh from the receivables file when sending, neve
   Sample values: company `ABC Steels Pvt Ltd`, invoice `BSC/5101`, link `https://crm.bharatsteels.in/feedback?inv=BSC%2F5101`.
 
 Every send is logged on the row ("Feedback sent") and as an activity on the customer page.
+
+### 10. Enquiries, SAP check and follow-up reminders
+
+- **Enquiries** tab: purchase enquiries (separate from **Leads**, which is the marketing database of prospects). Each enquiry has a number (ENQ-26-0001), product lines, source, an **Enquiry owner** and **Transfer to**. The owner gets a WhatsApp message when an enquiry is given to them or transferred to them, and open follow-ups move with it.
+- **SAP check**: every lead and enquiry is checked against the SAP customers by GSTIN, email, phone, company name and address (city / pincode). It shows **Existing SAP customer**, **Possibly an SAP customer** or **New customer**, and flags any open enquiry from the same company.
+- **Follow-ups** have a date **and time**. The person assigned gets a WhatsApp reminder at that time, or at 9:30 am if no time is given. This runs from the same 15-minute cron job (`/api/cron?job=mail`), so there is nothing extra to set up. Reminders are only sent for follow-ups that fell due in the last 6 hours.
+- Staff need their **mobile number** in Admin → Users to get these messages.
+
+Two WhatsApp templates are needed (WATI → Templates, category **Utility**, language English, no header, no buttons):
+
+`bsc_enquiry_assigned` (or set `WATI_ENQ_TEMPLATE`):
+> Hello {{name}}, enquiry {{ref}} from {{company}} has been assigned to you in the CRM. Requirement: {{details}}. Assigned by {{by}}. Please follow up with the customer.
+
+Samples: name `Varsha`, ref `ENQ-26-0001`, company `ABC Steels Pvt Ltd`, details `HR Coil E250 2mm 25 MT`, by `Paramaguru S`.
+
+`bsc_followup_reminder` (or set `WATI_FOLLOWUP_TEMPLATE`):
+> Hello {{name}}, reminder: follow up with {{customer}} at {{time}}. Task: {{task}}. Please update the CRM once done.
+
+Samples: name `Varsha`, customer `ABC Steels Pvt Ltd`, time `30-11-2026 11:30 AM`, task `ENQ-26-0001 – Send quotation`.
 
 ## Files
 

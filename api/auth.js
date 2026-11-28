@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { route, send, readBody, getSql, checkPassword, hashPassword, setSession, clearSession, currentUser, audit, findUser, passwordProblem } from './_lib.js';
 import { sendOtpWhatsApp, whatsappReady } from './_notify.js';
 
-const pub = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, slp_code: u.slp_code, emp_code: u.emp_code, mobile: u.mobile || '', must_change: !!u.must_change });
+const pub = u => ({ id: u.id, key: u.email || (u.emp_code ? 'emp:' + String(u.emp_code).toLowerCase() : 'uid:' + u.id), email: u.login_email !== undefined ? u.login_email : u.email, name: u.name, role: u.role, slp_code: u.slp_code, emp_code: u.emp_code, mobile: u.mobile || '', must_change: !!u.must_change });
 const codeHash = (id, code) => crypto.createHmac('sha256', String(process.env.SESSION_SECRET || '')).update(`${id}:${code}`).digest('hex');
 const maskMobile = m => (m ? `+91 ••••• ${String(m).slice(-4)}` : '');
 

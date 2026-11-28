@@ -268,6 +268,32 @@ export function ensureSchema() {
     )`;
     await sql`CREATE INDEX IF NOT EXISTS crm_party_gstin ON crm_mail_party(gstin)`;
     await sql`CREATE INDEX IF NOT EXISTS crm_party_domain ON crm_mail_party(domain)`;
+    // Enquiries: actual purchase requests (separate from leads, which are the marketing database of prospects)
+    await sql`CREATE TABLE IF NOT EXISTS crm_enquiries (
+      id SERIAL PRIMARY KEY, ref TEXT UNIQUE,
+      enq_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      company TEXT NOT NULL, contact TEXT, designation TEXT, phone TEXT, email TEXT, gstin TEXT,
+      address TEXT, city TEXT, state TEXT, pincode TEXT,
+      source TEXT, source_detail TEXT,
+      items JSONB NOT NULL DEFAULT '[]', total_qty NUMERIC(14,3),
+      required_by DATE, delivery_at TEXT, remarks TEXT,
+      status TEXT NOT NULL DEFAULT 'new',           -- new | in_progress | quoted | won | lost | on_hold
+      quote_value NUMERIC(16,2), lost_reason TEXT,
+      owner_email TEXT, transfers JSONB NOT NULL DEFAULT '[]',
+      card_code TEXT, sap_status TEXT, match_basis TEXT, suggest_code TEXT, lead_id INT,
+      created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_enq_owner ON crm_enquiries(owner_email, status)`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_enq_date ON crm_enquiries(enq_date DESC)`;
+    // Follow-ups: date AND time, enquiry link, WhatsApp reminder bookkeeping
+    await sql`ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS follow_up_ts TIMESTAMPTZ`;
+    await sql`ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS enquiry_id INT`;
+    await sql`ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS remind_result TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS crm_act_remind ON crm_activities(follow_up_ts) WHERE done = false AND reminded_at IS NULL`;
+    // Leads: more contact detail and the SAP check result
+    for (const col of ['gstin', 'address', 'state', 'pincode', 'designation', 'sap_status', 'match_basis', 'suggest_code'])
+      await sql.query(`ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS ${col} TEXT`);
     // Feedback requests sent from the Feedback tab (customer list)
     await sql`CREATE TABLE IF NOT EXISTS crm_fb_requests (
       id SERIAL PRIMARY KEY, card_code TEXT NOT NULL, company TEXT, invoice_no TEXT, link TEXT, phone TEXT, email TEXT,
@@ -348,11 +374,16 @@ export function setSession(req, res, uid) {
 export function clearSession(req, res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag(req)}`);
 }
+// One identity string per staff member, used for owners / assigned-to / created-by: their email, else emp:<code>.
+export const userKey = u => u.email || (u.emp_code ? 'emp:' + String(u.emp_code).toLowerCase() : 'uid:' + u.id);
+export const USER_KEY_SQL = "COALESCE(email, 'emp:' || lower(emp_code), 'uid:' || id)";
 export async function currentUser(req) {
   const p = verify(cookies(req)[COOKIE]);
   if (!p) return null;
   const rows = await getSql()`SELECT id, email, name, role, slp_code, emp_code, mobile, must_change FROM crm_users WHERE id = ${p.uid} AND active = true`;
-  return rows[0] || null;
+  const u = rows[0] || null;
+  if (u) { u.login_email = u.email; u.email = userKey(u); }   // staff imported without email are keyed by employee code
+  return u;
 }
 // The common starting password for new and imported staff (they must change it at first sign-in).
 export const commonPassword = () => String(process.env.COMMON_PASSWORD || 'Bsg@1234');

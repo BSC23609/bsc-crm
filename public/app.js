@@ -39,7 +39,7 @@ async function api(path, body) {
   return d;
 }
 let toastT;
-function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.remove('hidden'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), 3200); }
+function toast(m, ms = 3200) { const t = $('#toast'); t.textContent = m; t.classList.remove('hidden'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), ms); }
 function modal(html, cls = '') {
   $('#modalRoot').innerHTML = `<div class="modal-bg" id="mbg"><div class="modal ${cls}">${html}</div></div>`;
   $('#mbg').addEventListener('mousedown', e => { if (e.target.id === 'mbg') closeModal(); });
@@ -300,7 +300,7 @@ function sapWarn(s) {
 }
 
 /* ---------------- router ---------------- */
-const ROUTES = { '': viewDash, customers: viewCustomers, c: viewCustomer, followups: viewFollowups, leads: viewLeads, kyc: viewKyc, feedback: viewFeedback, ar: viewAR, mail: viewMail, admin: viewAdmin };
+const ROUTES = { '': viewDash, customers: viewCustomers, c: viewCustomer, followups: viewFollowups, enq: viewEnquiries, leads: viewLeads, kyc: viewKyc, feedback: viewFeedback, ar: viewAR, mail: viewMail, admin: viewAdmin };
 function route() {
   const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
   S.hq = new URLSearchParams(qs || '');
@@ -404,7 +404,7 @@ async function viewCustomers() {
   const segs = [...new Set(all.map(c => c.segment).filter(Boolean))].sort();
   const FILTERS = [['all', 'All'], ['mine', 'My customers'], ['active', 'Active (90 days)'], ['dormant', `Dormant (${dd}+ days)`], ['over', 'Over credit limit'], ['nokyc', 'No segment / KYC'], ['frozen', 'Frozen in SAP'], ['followup', 'Has open follow-up']];
   const test = {
-    all: () => true, mine: c => (S.me.slp_code != null && c.slp_code === S.me.slp_code) || c.owner_email === S.me.email,
+    all: () => true, mine: c => (S.me.slp_code != null && c.slp_code === S.me.slp_code) || c.owner_email === S.me.key,
     active: c => daysSince(c.last_invoice) != null && daysSince(c.last_invoice) <= 90, dormant: c => daysSince(c.last_invoice) > dd,
     over: c => c.credit_line > 0 && c.balance > c.credit_line, nokyc: c => !c.segment, frozen: c => c.frozen, followup: c => c.open_followups > 0
   };
@@ -855,11 +855,15 @@ function profileModal(code, p, done) {
 }
 
 /* ---------------- activities ---------------- */
+const staffName = k => { const x = (S.meta?.staff || []).find(s => s.email === k); return x ? (x.name || k) : (k || ''); };
+const hhmm = ts => { if (!ts) return ''; const d = new Date(new Date(ts).getTime() + 330 * 60000); return d.toISOString().slice(11, 16); };
+const istDate = ts => new Date(new Date(ts).getTime() + 330 * 60000).toISOString().slice(0, 10);
+const fuWhen = a => a.follow_up_ts ? `${fdate(istDate(a.follow_up_ts))}, ${new Date(a.follow_up_ts).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' })}` : fdate(a.follow_up_at);
 function timeline(list, refresh) {
   if (!list.length) return '<div class="empty">Nothing logged yet. Log calls, visits and complaints here so the whole team sees the history.</div>';
   return `<ul class="timeline">${list.map(a => `<li><div class="ic">${ACT_IC[a.type] || '📝'}</div><div class="bd">
-    <div class="t">${esc(a.subject)} ${a.follow_up_at && !a.done ? `<span class="chip ${d10(a.follow_up_at) < today() ? 'bad' : d10(a.follow_up_at) === today() ? 'warn' : 'info'}">Follow up ${fdate(a.follow_up_at)}</span>` : ''} ${a.follow_up_at && a.done ? '<span class="chip ok">Done</span>' : ''}</div>
-    <div class="m">${ACT_L[a.type] || a.type} · ${fdt(a.created_at)} · ${esc(a.created_by || '')}${a.owner_email && a.owner_email !== a.created_by ? ' → ' + esc(a.owner_email) : ''}${a.customer && !refresh ? ' · ' + esc(a.customer) : ''}</div>
+    <div class="t">${esc(a.subject)} ${a.follow_up_at && !a.done ? `<span class="chip ${d10(a.follow_up_at) < today() ? 'bad' : d10(a.follow_up_at) === today() ? 'warn' : 'info'}">Follow up ${fuWhen(a)}</span>` : ''} ${a.follow_up_at && a.done ? '<span class="chip ok">Done</span>' : ''}</div>
+    <div class="m">${ACT_L[a.type] || a.type} · ${fdt(a.created_at)} · ${esc(staffName(a.created_by))}${a.owner_email && a.owner_email !== a.created_by ? ' → ' + esc(staffName(a.owner_email)) : ''}${a.remind_result ? ` · <span title="WhatsApp reminder">⏰ ${esc(a.remind_result)}</span>` : ''}${a.customer && !refresh ? ' · ' + esc(a.customer) : ''}</div>
     ${a.notes ? `<div class="nt">${esc(a.notes)}</div>` : ''}</div>
     ${canEdit() ? `<div class="nowrap">${a.follow_up_at && !a.done ? `<button class="btn sm sec" data-adone="${a.id}">Done</button> ` : ''}<button class="btn sm sec" data-aedit="${a.id}">Edit</button></div>` : ''}</li>`).join('')}</ul>`;
 }
@@ -872,30 +876,32 @@ function bindTimeline(root, refresh, list) {
 }
 function doneModal(id, refresh) {
   modal(`<h2>Mark follow-up done</h2><div class="f"><label>What happened? (optional)</label><textarea id="dNote" rows="3"></textarea></div>
-    <div class="f"><label>Next follow-up (optional)</label><input type="date" id="dNext" min="${today()}"></div>
+    <div class="fg"><div class="f"><label>Next follow-up (optional)</label><input type="date" id="dNext" min="${today()}"></div><div class="f"><label>Time</label><input type="time" id="dTime"></div></div>
     <div class="acts"><button class="btn sec" onclick="closeModal()">Cancel</button><button class="btn" id="dGo">Save</button></div>`);
-  $('#dGo').onclick = async () => { await api('/api/crm', { action: 'activity_done', id, done: true, note: $('#dNote').value, next_at: $('#dNext').value || undefined }); closeModal(); toast('Follow-up closed'); refreshBadges(); refresh(); };
+  $('#dGo').onclick = async () => { await api('/api/crm', { action: 'activity_done', id, done: true, note: $('#dNote').value, next_at: $('#dNext').value || undefined, next_time: $('#dTime').value || undefined }); closeModal(); toast('Follow-up closed'); refreshBadges(); refresh(); };
 }
 function activityModal(a, done) {
   const M = S.meta;
   modal(`<h2>${a.id ? 'Edit activity' : 'Log activity'}</h2>
-    ${!a.card_code && !a.lead_id ? `<div class="f"><label>Customer</label><input id="aCust" list="custList" placeholder="Type a customer name or code"><datalist id="custList"></datalist></div>` : ''}
+    ${!a.card_code && !a.lead_id && !a.enquiry_id ? `<div class="f"><label>Customer</label><input id="aCust" list="custList" placeholder="Type a customer name or code"><datalist id="custList"></datalist></div>` : ''}
     <div class="fg"><div class="f"><label>Type</label><select id="aType">${opts(M.types.map(t => [t, ACT_L[t]]), a.type || 'call', null)}</select></div>
-    <div class="f"><label>Follow up on</label><input type="date" id="aDue" value="${esc(d10(a.follow_up_at))}"></div>
-    <div class="f"><label>Assigned to</label><select id="aOwn">${opts(M.staff.map(s => [s.email, s.name || s.email]), a.owner_email || S.me.email, null)}</select></div></div>
+    <div class="f"><label>Next follow-up date</label><input type="date" id="aDue" value="${esc(d10(a.follow_up_at))}"></div>
+    <div class="f"><label>Time</label><input type="time" id="aTime" value="${esc(hhmm(a.follow_up_ts))}"></div>
+    <div class="f"><label>Assigned to</label><select id="aOwn">${opts(M.staff.map(s => [s.email, s.name || s.email]), a.owner_email || S.me.key, null)}</select></div></div>
     <div class="toolbar" style="margin-top:-4px">${[['Tomorrow', 1], ['In 3 days', 3], ['Next week', 7], ['In a month', 30]].map(([l, n]) => `<button class="btn sm sec" data-dd="${n}">${l}</button>`).join('')}<button class="btn sm sec" data-dd="">No follow-up</button></div>
+    <p class="small muted" style="margin:-6px 0 8px">The person it is assigned to gets a WhatsApp reminder at that time (9:30 am if no time is given).</p>
     <div class="f"><label>Subject</label><input id="aSub" value="${esc(a.subject || '')}" placeholder="e.g. Discussed December requirement of 2mm HR coils"></div>
     <div class="f"><label>Notes</label><textarea id="aNotes" rows="4">${esc(a.notes || '')}</textarea></div>
     ${a.id && a.follow_up_at ? `<label><input type="checkbox" id="aDone" ${a.done ? 'checked' : ''}> Follow-up done</label>` : ''}
     <div class="err" id="aErr"></div>
     <div class="acts">${a.id ? '<button class="btn danger" id="aDel">Delete</button><span class="sp"></span>' : ''}<button class="btn sec" onclick="closeModal()">Cancel</button><button class="btn" id="aGo">Save</button></div>`);
-  $$('[data-dd]').forEach(b => b.onclick = () => { $('#aDue').value = b.dataset.dd ? addDays(today(), +b.dataset.dd) : ''; });
+  $$('[data-dd]').forEach(b => b.onclick = () => { $('#aDue').value = b.dataset.dd ? addDays(today(), +b.dataset.dd) : ''; if (!b.dataset.dd) $('#aTime').value = ''; });
   if ($('#aCust')) loadCustomers().then(all => { $('#custList').innerHTML = all.map(c => `<option value="${esc(c.card_code)}">${esc(c.name)}</option>`).join(''); });
   if ($('#aDel')) $('#aDel').onclick = async () => { if (!confirm('Delete this activity?')) return; try { await api('/api/crm', { action: 'activity_delete', id: a.id }); closeModal(); done(); } catch (e) { $('#aErr').textContent = e.message; } };
   $('#aGo').onclick = async () => {
     try {
-      await api('/api/crm', { action: 'activity_save', id: a.id, card_code: a.card_code || ($('#aCust') ? $('#aCust').value.trim() : ''), lead_id: a.lead_id, type: $('#aType').value, subject: $('#aSub').value,
-        notes: $('#aNotes').value, follow_up_at: $('#aDue').value, owner_email: $('#aOwn').value, done: $('#aDone') ? $('#aDone').checked : !!a.done });
+      await api('/api/crm', { action: 'activity_save', id: a.id, card_code: a.card_code || ($('#aCust') ? $('#aCust').value.trim() : ''), lead_id: a.lead_id, enquiry_id: a.enquiry_id, type: $('#aType').value, subject: $('#aSub').value,
+        notes: $('#aNotes').value, follow_up_at: $('#aDue').value, follow_up_time: $('#aDue').value ? $('#aTime').value : '', owner_email: $('#aOwn').value, done: $('#aDone') ? $('#aDone').checked : !!a.done });
       closeModal(); toast('Saved'); refreshBadges(); done();
     } catch (e) { $('#aErr').textContent = e.message; }
   };
@@ -908,16 +914,171 @@ async function viewFollowups() {
   if (FUmine === null) FUmine = S.me.role === 'sales';
   const { rows } = await api('/api/crm', { action: 'activities', due: true, mine: FUmine });
   const t = today(), groups = [['Overdue', r => d10(r.follow_up_at) < t], ['Today', r => d10(r.follow_up_at) === t], ['Next 7 days', r => d10(r.follow_up_at) > t && d10(r.follow_up_at) <= addDays(t, 7)], ['Later', r => d10(r.follow_up_at) > addDays(t, 7)]];
-  $('#main').innerHTML = `<h1 class="pg">Follow-ups</h1><p class="pgsub">Open follow-ups from calls, visits, leads and low feedback scores.</p>
+  $('#main').innerHTML = `<h1 class="pg">Follow-ups</h1><p class="pgsub">Open follow-ups from calls, visits, leads, enquiries and low feedback scores. The person assigned gets a WhatsApp reminder at the follow-up time.</p>
     <div class="toolbar"><div class="seg"><button data-m="1" class="${FUmine ? 'on' : ''}">Mine</button><button data-m="0" class="${FUmine ? '' : 'on'}">Everyone</button></div><span class="sp"></span>${canEdit() ? '<button class="btn" id="fuNew">+ Log activity</button>' : ''}</div>
     ${groups.map(([l, f]) => { const g = rows.filter(f); return g.length ? `<div class="card"><h2>${l} <span class="chip ${l === 'Overdue' ? 'bad' : l === 'Today' ? 'warn' : ''}">${g.length}</span></h2>
-      <table><tr><th>Due</th><th>Customer / lead</th><th>What</th><th>Assigned to</th><th></th></tr>${g.map(a => `<tr><td class="nowrap">${fdate(a.follow_up_at)}</td>
-      <td>${a.card_code ? `<a href="#/c/${encodeURIComponent(a.card_code)}">${esc(a.customer || a.card_code)}</a>` : a.lead_id ? `<a href="#/leads?id=${a.lead_id}">${esc(a.lead_company || 'Lead')}</a> <span class="chip">lead</span>` : ''}</td>
-      <td>${ACT_IC[a.type] || ''} <b>${esc(a.subject)}</b>${a.notes ? `<div class="small muted" style="white-space:pre-line">${esc(a.notes.slice(0, 220))}</div>` : ''}</td><td>${esc(a.owner_email || '')}</td>
+      <table><tr><th>Due</th><th>Customer / lead / enquiry</th><th>What</th><th>Assigned to</th><th></th></tr>${g.map(a => `<tr><td class="nowrap">${fuWhen(a)}${a.reminded_at ? `<div class="small muted" title="${esc(a.remind_result || '')}">⏰ ${String(a.remind_result || '').startsWith('✓') ? 'reminded' : 'reminder failed'}</div>` : ''}</td>
+      <td>${a.enquiry_id ? `<a href="#/enq?id=${a.enquiry_id}">${esc(a.enq_ref || 'Enquiry')}</a> <span class="chip info">enquiry</span><div class="small">${esc(a.enq_company || '')}</div>` : a.card_code ? `<a href="#/c/${encodeURIComponent(a.card_code)}">${esc(a.customer || a.card_code)}</a>` : a.lead_id ? `<a href="#/leads?id=${a.lead_id}">${esc(a.lead_company || 'Lead')}</a> <span class="chip">lead</span>` : ''}</td>
+      <td>${ACT_IC[a.type] || ''} <b>${esc(a.subject)}</b>${a.notes ? `<div class="small muted" style="white-space:pre-line">${esc(a.notes.slice(0, 220))}</div>` : ''}</td><td>${esc(staffName(a.owner_email))}</td>
       <td class="nowrap">${canEdit() ? `<button class="btn sm" data-adone="${a.id}">Done</button> <button class="btn sm sec" data-aedit="${a.id}">Edit</button>` : ''}</td></tr>`).join('')}</table></div>` : ''; }).join('') || '<div class="card empty">No open follow-ups. 🎉</div>'}`;
   $$('[data-m]').forEach(b => b.onclick = () => { FUmine = b.dataset.m === '1'; viewFollowups(); });
   bindTimeline($('#main'), viewFollowups, rows);
   if ($('#fuNew')) $('#fuNew').onclick = () => activityModal({}, viewFollowups);
+}
+
+/* ================================================================= ENQUIRIES (purchase requests) */
+const ENQ_L = { new: 'New', in_progress: 'In progress', quoted: 'Quoted', won: 'Won', lost: 'Lost', on_hold: 'On hold' };
+const ENQ_C = { new: 'info', in_progress: 'warn', quoted: 'info', won: 'ok', lost: 'bad', on_hold: '' };
+const UNITS = ['MT', 'Kg', 'Nos', 'Sheets', 'Coils', 'Mtr'];
+const itemsText = items => (items || []).map(x => [x.product, x.grade, x.size, x.qty ? `${x.qty} ${x.unit}` : ''].filter(Boolean).join(' ')).join('; ');
+// SAP check result box (leads + enquiries)
+function sapBox(r) {
+  if (!r) return '';
+  const link = c => `<a href="#/c/${encodeURIComponent(c)}" target="_blank">${esc(r.name || c)} (${esc(c)})</a>`;
+  const main = r.status === 'existing' ? `<div class="banner ok" style="margin:0">✅ <b>Existing SAP customer:</b> ${link(r.code)} — matched by ${esc(r.basis)}</div>`
+    : r.status === 'possible' ? `<div class="banner warn" style="margin:0">⚠️ <b>Possibly an SAP customer:</b> ${link(r.suggest)} — ${esc(r.basis)}. Check before treating as new.</div>`
+    : `<div class="banner" style="margin:0">🆕 <b>New customer</b> — not found in SAP by GSTIN, name, address, phone or email.</div>`;
+  const dup = (r.open_enquiries || []).length ? `<div class="banner warn" style="margin:6px 0 0">Open enquiry already exists: ${r.open_enquiries.map(e => `<a href="#/enq?id=${e.id}" target="_blank">${esc(e.ref)}</a> (${esc(ENQ_L[e.status] || e.status)}, ${esc(staffName(e.owner_email))})`).join(', ')}</div>` : '';
+  const lead = (r.leads || []).length ? `<div class="small muted" style="margin-top:6px">In Leads: ${r.leads.map(l => `<a href="#/leads?id=${l.id}" target="_blank">${esc(l.company)}</a>`).join(', ')}</div>` : '';
+  return main + dup + lead;
+}
+const EF = { q: '', status: 'open', owner: '', source: '' };
+async function viewEnquiries() {
+  loading();
+  const d = await api('/api/crm', { action: 'enq_list' });
+  if (EF.owner === '' && S.me.role === 'sales') EF.owner = S.me.key;
+  const t = today(), m0 = t.slice(0, 7);
+  const rows0 = d.rows;
+  const open = rows0.filter(e => !['won', 'lost'].includes(e.status));
+  const k = { open: open.length, today: rows0.filter(e => d10(e.enq_date) === t).length, quoted: rows0.filter(e => e.status === 'quoted').length,
+    wonM: rows0.filter(e => e.status === 'won' && d10(e.updated_at).slice(0, 7) === m0).length,
+    overdue: open.filter(e => e.next_follow && new Date(e.next_follow) < new Date()).length, noFollow: open.filter(e => !e.next_follow).length,
+    mt: open.reduce((a, e) => a + num(e.total_qty), 0) };
+  $('#main').innerHTML = `<h1 class="pg">Enquiries</h1><p class="pgsub">Purchase enquiries from customers. Each has an owner; transfer it to another salesperson from the form — they get a WhatsApp message.</p>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Open enquiries</div><div class="v">${k.open}</div><div class="s">${Math.round(k.mt).toLocaleString('en-IN')} MT</div></div>
+      <div class="kpi"><div class="l">Received today</div><div class="v">${k.today}</div></div>
+      <div class="kpi"><div class="l">Quoted</div><div class="v">${k.quoted}</div></div>
+      <div class="kpi"><div class="l">Won this month</div><div class="v">${k.wonM}</div></div>
+      <div class="kpi ${k.overdue ? 'alert' : ''}"><div class="l">Follow-up overdue</div><div class="v">${k.overdue}</div><div class="s">${k.noFollow} open with no follow-up set</div></div></div>
+    <div class="toolbar"><input type="search" id="eq" placeholder="Search ref, company, contact, phone, product" value="${esc(EF.q)}">
+      <select id="es">${opts([['open', 'Open (not won/lost)'], ['all', 'All statuses'], ...d.statuses.map(x => [x, ENQ_L[x]])], EF.status, null)}</select>
+      <select id="eo">${opts([[S.me.key, 'My enquiries'], ...S.meta.staff.filter(x => x.email !== S.me.key).map(x => [x.email, x.name || x.email])], EF.owner, 'All owners')}</select>
+      <select id="esr">${opts(d.sources, EF.source, 'All sources')}</select>
+      <span class="sp"></span>${canEdit() ? '<button class="btn" id="eNew">+ New enquiry</button>' : ''}<button class="btn sec" id="eX">Export Excel</button></div>
+    <div class="tw" id="eT"></div>`;
+  let shown = [];
+  const draw = () => {
+    const q = norm(EF.q).trim();
+    shown = rows0.filter(e => (EF.status === 'all' || (EF.status === 'open' ? !['won', 'lost'].includes(e.status) : e.status === EF.status))
+      && (!EF.owner || e.owner_email === EF.owner) && (!EF.source || e.source === EF.source)
+      && (!q || [e.ref, e.company, e.contact, e.phone, e.city, e.gstin, itemsText(e.items), e.sap_name].some(v => norm(v).includes(q))));
+    $('#eT').innerHTML = shown.length ? `<table><tr><th>Ref / date</th><th>Company</th><th>Requirement</th><th>Source</th><th>Owner</th><th>Status</th><th>Next follow-up</th></tr>
+      ${shown.map(e => { const od = e.next_follow && new Date(e.next_follow) < new Date(); return `<tr class="click" data-enq="${e.id}">
+        <td class="nowrap"><b>${esc(e.ref)}</b><div class="small muted">${fdate(e.enq_date)}</div></td>
+        <td><b>${esc(e.company)}</b><div class="small muted">${esc([e.contact, e.city].filter(Boolean).join(' · '))}</div>
+          <div class="small">${e.sap_status === 'existing' ? `<span class="chip ok">SAP ${esc(e.card_code)}</span>` : e.sap_status === 'possible' ? `<span class="chip warn">Check SAP: ${esc(e.suggest_code)}</span>` : '<span class="chip info">New customer</span>'}</div></td>
+        <td class="small" style="max-width:300px">${esc(itemsText(e.items))}${e.total_qty ? `<div class="muted">${num(e.total_qty).toLocaleString('en-IN')} MT</div>` : ''}</td>
+        <td class="small">${esc(e.source || '')}</td><td class="small">${esc(staffName(e.owner_email))}${e.transfers ? ` <span class="muted" title="transferred">↪${e.transfers}</span>` : ''}</td>
+        <td><span class="chip ${ENQ_C[e.status]}">${ENQ_L[e.status]}</span>${e.quote_value ? `<div class="small muted">${inrShort(e.quote_value)}</div>` : ''}</td>
+        <td class="nowrap small">${e.next_follow ? `<span class="chip ${od ? 'bad' : 'info'}">${fdt(e.next_follow)}</span>` : (['won', 'lost'].includes(e.status) ? '' : '<span class="muted">not set</span>')}</td></tr>`; }).join('')}</table>`
+      : '<div class="card empty">No enquiries here yet.</div>';
+    $$('[data-enq]').forEach(r => r.onclick = () => enquiryModal(+r.dataset.enq, d));
+  };
+  $('#eq').oninput = e => { EF.q = e.target.value; draw(); };
+  $('#es').onchange = e => { EF.status = e.target.value; draw(); };
+  $('#eo').onchange = e => { EF.owner = e.target.value; draw(); };
+  $('#esr').onchange = e => { EF.source = e.target.value; draw(); };
+  if ($('#eNew')) $('#eNew').onclick = () => enquiryModal(null, d);
+  $('#eX').onclick = () => downloadXlsx(`BSC-enquiries-${today()}.xlsx`, 'Enquiries', [
+    { h: 'Ref', k: 'ref', w: 13 }, { h: 'Date', k: 'enq_date', fmt: 'date', w: 12 }, { h: 'Company', k: 'company', w: 32 }, { h: 'Contact', k: 'contact', w: 18 },
+    { h: 'Mobile', k: 'phone', w: 13 }, { h: 'Email', k: 'email', w: 24 }, { h: 'City', k: 'city', w: 13 }, { h: 'GSTIN', k: 'gstin', w: 17 },
+    { h: 'SAP', v: r => r.sap_status === 'existing' ? 'Existing ' + r.card_code : r.sap_status === 'possible' ? 'Check ' + r.suggest_code : 'New', w: 16 },
+    { h: 'Requirement', v: r => itemsText(r.items), w: 44 }, { h: 'Qty (MT)', k: 'total_qty', fmt: 'num', total: true, w: 10 }, { h: 'Source', k: 'source', w: 18 },
+    { h: 'Owner', v: r => staffName(r.owner_email), w: 20 }, { h: 'Status', v: r => ENQ_L[r.status], w: 11 }, { h: 'Quote (₹)', k: 'quote_value', fmt: 'inr', w: 14 },
+    { h: 'Lost reason', k: 'lost_reason', w: 18 }, { h: 'Next follow-up', v: r => r.next_follow ? fdt(r.next_follow) : '', w: 18 }], shown,
+    `Bharat Steel (Chennai) Pvt. Ltd. — Enquiries — ${fdate(today())}`);
+  draw();
+  const focus = S.hq.get('id'); if (focus) enquiryModal(+focus, d);
+}
+async function enquiryModal(id, d, pre = {}) {
+  const M = S.meta, ed = canEdit();
+  const g = id ? await api('/api/crm', { action: 'enq_get', id }) : { enquiry: { status: 'new', items: [{ unit: 'MT' }], owner_email: S.me.key, enq_date: today(), ...pre }, activities: [] };
+  const e = g.enquiry, staffOpts = M.staff.map(x => [x.email, (x.name || x.email) + (x.designation ? ' — ' + x.designation : '')]);
+  const itemRow = (x = {}) => `<tr class="irow"><td><input class="iP" list="prodList" value="${esc(x.product || '')}" placeholder="Product"></td><td><input class="iG" value="${esc(x.grade || '')}" placeholder="E250 / IS2062"></td>
+    <td><input class="iS" value="${esc(x.size || '')}" placeholder="10mm x 2500 x 6300"></td><td><input class="iQ" type="number" min="0" step="any" value="${esc(x.qty || '')}" style="width:90px"></td>
+    <td><select class="iU">${opts(UNITS, x.unit || 'MT', null)}</select></td><td>${ed ? '<button class="btn sm sec iX" title="Remove">✕</button>' : ''}</td></tr>`;
+  modal(`<h2>${id ? `${esc(e.ref)} — ${esc(e.company)}` : 'New enquiry'} ${id ? `<span class="chip ${ENQ_C[e.status]}">${ENQ_L[e.status]}</span>` : ''}</h2>
+    ${id ? `<p class="small muted" style="margin-top:-8px">Received ${fdate(e.enq_date)} · created by ${esc(staffName(e.created_by))} ${fdt(e.created_at)}</p>` : ''}
+    <h3>Customer</h3>
+    <div class="fg"><div class="f"><label>Company *</label><input id="eC" value="${esc(e.company || '')}"></div>
+      <div class="f"><label>Contact person *</label><input id="eP" value="${esc(e.contact || '')}"></div>
+      <div class="f"><label>Designation</label><input id="eDs" value="${esc(e.designation || '')}"></div>
+      <div class="f"><label>Mobile *</label><input id="eM" inputmode="tel" value="${esc(e.phone || '')}"></div>
+      <div class="f"><label>Email</label><input id="eE" type="email" value="${esc(e.email || '')}"></div>
+      <div class="f"><label>GSTIN</label><input id="eG" value="${esc(e.gstin || '')}" maxlength="15" style="text-transform:uppercase"></div>
+      <div class="f" style="grid-column:1/-1"><label>Address</label><input id="eA" value="${esc(e.address || '')}"></div>
+      <div class="f"><label>City</label><input id="eCi" value="${esc(e.city || '')}"></div><div class="f"><label>State</label><input id="eSt" value="${esc(e.state || 'Tamil Nadu')}"></div>
+      <div class="f"><label>Pincode</label><input id="ePi" inputmode="numeric" maxlength="6" value="${esc(e.pincode || '')}"></div></div>
+    <div id="eSap" data-k="${id || 'new'}-${Date.now()}" style="margin:4px 0 10px">${id ? sapBox({ status: e.sap_status, code: e.card_code, suggest: e.suggest_code, basis: e.match_basis, name: e.sap_name }) : '<div class="small muted">The SAP check runs when you fill company, GSTIN, mobile or pincode.</div>'}</div>
+    <h3>Requirement</h3>
+    <datalist id="prodList">${(M.products || []).map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+    <div class="tw"><table class="small"><tr><th>Product *</th><th>Grade</th><th>Size / thickness</th><th>Qty</th><th>Unit</th><th></th></tr><tbody id="eItems">${(e.items?.length ? e.items : [{}]).map(itemRow).join('')}</tbody></table></div>
+    ${ed ? '<button class="btn sm sec" id="eAdd" style="margin:6px 0 10px">+ Add product</button>' : ''}
+    <div class="fg"><div class="f"><label>Enquiry date</label><input type="date" id="eDt" value="${esc(d10(e.enq_date))}"></div>
+      <div class="f"><label>Required by</label><input type="date" id="eRb" value="${esc(d10(e.required_by))}"></div>
+      <div class="f"><label>Delivery location</label><input id="eDl" value="${esc(e.delivery_at || '')}"></div>
+      <div class="f"><label>Source *</label><select id="eSo">${opts(d.sources, e.source || '', '—')}</select></div>
+      <div class="f"><label>Source detail</label><input id="eSd" value="${esc(e.source_detail || '')}" placeholder="campaign / referred by / portal"></div></div>
+    <div class="f"><label>Remarks</label><textarea id="eR" rows="2">${esc(e.remarks || '')}</textarea></div>
+    <h3>Owner &amp; status</h3>
+    <div class="fg"><div class="f"><label>Enquiry owner *</label><select id="eO">${opts(staffOpts, e.owner_email || S.me.key, null)}</select></div>
+      <div class="f"><label>Transfer to</label><select id="eT2">${opts(staffOpts.filter(x => x[0] !== e.owner_email), '', '— keep with owner —')}</select></div>
+      <div class="f"><label>Transfer note</label><input id="eTn" placeholder="why / what to do"></div>
+      <div class="f"><label>Status</label><select id="eS">${opts(d.statuses.map(x => [x, ENQ_L[x]]), e.status, null)}</select></div>
+      <div class="f"><label>Quote value (₹)</label><input id="eQv" type="number" min="0" value="${esc(e.quote_value ?? '')}"></div>
+      <div class="f"><label>Lost reason</label><select id="eLr">${opts(M.lostReasons || [], e.lost_reason, '—')}</select></div></div>
+    ${(e.transfers || []).length ? `<p class="small muted">Transfers: ${e.transfers.map(t => `${esc(staffName(t.from))} → <b>${esc(staffName(t.to))}</b> (${fdt(t.at)}${t.note ? ', ' + esc(t.note) : ''})`).join(' · ')}</p>` : ''}
+    <h3>Next follow-up</h3>
+    <div class="fg"><div class="f"><label>Date</label><input type="date" id="eFd" min="${today()}"></div><div class="f"><label>Time</label><input type="time" id="eFt"></div>
+      <div class="f" style="grid-column:span 2"><label>What to do</label><input id="eFn" placeholder="e.g. Send quotation / confirm rate"></div></div>
+    <p class="small muted" style="margin-top:-6px">The owner gets a WhatsApp reminder at that time.</p>
+    ${id ? `<h3 style="display:flex;align-items:center;gap:8px">Activity ${ed ? '<button class="btn sm sec" id="eLog">+ Log call / follow-up</button>' : ''}</h3><div id="eActs">${timeline(g.activities, true)}</div>` : ''}
+    <div class="err" id="eErr"></div>
+    <div class="acts">${id && isAdmin() ? '<button class="btn danger" id="eDel">Delete</button>' : ''}${id && ed && e.sap_status !== 'existing' ? '<button class="btn sec" id="eKyc">Send ledger form</button>' : ''}<span class="sp"></span>
+      <button class="btn sec" onclick="closeModal()">Close</button>${ed ? `<button class="btn" id="eGo">${id ? 'Save' : 'Create enquiry'}</button>` : ''}</div>`, 'wide');
+  if (!ed) { $$('.modal input,.modal select,.modal textarea').forEach(i => i.disabled = true); return; }
+  const bindRows = () => $$('.iX').forEach(b => b.onclick = () => { if ($$('.irow').length > 1) b.closest('tr').remove(); });
+  $('#eAdd').onclick = () => { $('#eItems').insertAdjacentHTML('beforeend', itemRow({})); bindRows(); }; bindRows();
+  let tmr = null; const mk = $('#eSap').dataset.k;   // results only land in the form that asked for them
+  const check = () => { clearTimeout(tmr); tmr = setTimeout(async () => {
+    if (!$('#eC') || $('#eSap')?.dataset.k !== mk) return;
+    if (!$('#eC').value.trim() && !$('#eG').value.trim() && !$('#eM').value.trim()) return;
+    try { const r = await api('/api/crm', { action: 'sap_check', id, company: $('#eC').value, gstin: $('#eG').value, phone: $('#eM').value, email: $('#eE').value, city: $('#eCi').value, pincode: $('#ePi').value });
+      if ($('#eSap') && $('#eSap').dataset.k === mk) $('#eSap').innerHTML = sapBox(r); } catch { /* ignore */ } }, 500); };
+  ['#eC', '#eG', '#eM', '#eE', '#eCi', '#ePi'].forEach(s => $(s).addEventListener('change', check));
+  if (!id && (pre.company || pre.phone)) check();
+  if ($('#eLog')) $('#eLog').onclick = () => activityModal({ enquiry_id: id, card_code: e.card_code, type: 'call', owner_email: e.owner_email }, () => enquiryModal(id, d));
+  bindTimeline($('#eActs') || document.createElement('div'), () => enquiryModal(id, d), g.activities);
+  if ($('#eDel')) $('#eDel').onclick = async () => { if (!confirm(`Delete enquiry ${e.ref}? This cannot be undone.`)) return; await api('/api/crm', { action: 'enq_delete', id }); closeModal(); viewEnquiries(); };
+  if ($('#eKyc')) $('#eKyc').onclick = () => inviteKyc({ company: $('#eC').value, contact_person: $('#eP').value, phone: $('#eM').value, email: $('#eE').value });
+  $('#eGo').onclick = async () => {
+    const items = $$('.irow').map(r => ({ product: r.querySelector('.iP').value.trim(), grade: r.querySelector('.iG').value.trim(), size: r.querySelector('.iS').value.trim(),
+      qty: r.querySelector('.iQ').value, unit: r.querySelector('.iU').value })).filter(x => x.product);
+    if (!$('#eSo').value) { $('#eErr').textContent = 'Pick the source of the enquiry'; return; }
+    if ($('#eFt').value && !$('#eFd').value) { $('#eErr').textContent = 'Pick the follow-up date as well as the time'; return; }
+    $('#eGo').disabled = true; $('#eErr').textContent = '';
+    try {
+      const r = await api('/api/crm', { action: 'enq_save', id, company: $('#eC').value, contact: $('#eP').value, designation: $('#eDs').value, phone: $('#eM').value, email: $('#eE').value,
+        gstin: $('#eG').value, address: $('#eA').value, city: $('#eCi').value, state: $('#eSt').value, pincode: $('#ePi').value, items, enq_date: $('#eDt').value,
+        required_by: $('#eRb').value, delivery_at: $('#eDl').value, source: $('#eSo').value, source_detail: $('#eSd').value, remarks: $('#eR').value,
+        owner_email: $('#eO').value, transfer_to: $('#eT2').value, transfer_note: $('#eTn').value, status: $('#eS').value, quote_value: $('#eQv').value,
+        lost_reason: $('#eLr').value, follow_up_at: $('#eFd').value, follow_up_time: $('#eFt').value, follow_up_note: $('#eFn').value, lead_id: e.lead_id || pre.lead_id });
+      const n = (r.notified || []).map(x => `${x.ok ? '💬 WhatsApp sent to' : '⚠️ WhatsApp not sent to'} ${x.to}${x.ok ? '' : ': ' + x.message}`).join(' · ');
+      toast(`${r.ref} saved${n ? ' — ' + n : ''}`, n && n.includes('⚠️') ? 6000 : 3000);
+      closeModal(); refreshBadges(); viewEnquiries();
+    } catch (err) { $('#eErr').textContent = err.message; $('#eGo').disabled = false; }
+  };
 }
 
 /* ================================================================= LEADS */
@@ -927,14 +1088,14 @@ async function viewLeads() {
   const d = await api('/api/crm', { action: 'leads' });
   const focus = S.hq.get('id');
   const t = today();
-  $('#main').innerHTML = `<h1 class="pg">Leads</h1><p class="pgsub">Enquiries from new buyers until they get a SAP ledger. Send the ledger form from a lead when it is won.</p>
+  $('#main').innerHTML = `<h1 class="pg">Leads</h1><p class="pgsub">Your database of prospects for marketing — they may or may not have asked for anything yet. When a lead asks for a quote, open it and click <b>Create enquiry</b>. Each lead is checked against SAP customers.</p>
     <div class="toolbar"><input type="search" id="lq" placeholder="Search leads"><span class="sp"></span>${canEdit() ? '<button class="btn" id="lNew">+ New lead</button>' : ''}</div>
     <div class="kanban" id="kb"></div>`;
   const draw = () => {
     const q = norm($('#lq').value);
     const rows = d.rows.filter(l => !q || norm([l.company, l.contact, l.city, l.phone, l.product].join(' ')).includes(q));
     $('#kb').innerHTML = d.stages.map(s => { const g = rows.filter(l => l.stage === s); return `<div class="col"><h3><span>${STAGE_L[s]}</span><span>${g.length}${g.some(l => l.est_mt) ? ' · ' + Math.round(g.reduce((a, l) => a + num(l.est_mt), 0)) + ' MT' : ''}</span></h3>
-      ${g.map(l => `<div class="lead" data-lead="${l.id}"><div class="c">${esc(l.company)}</div><div class="m">${esc([l.contact, l.city].filter(Boolean).join(' · '))}</div>
+      ${g.map(l => `<div class="lead" data-lead="${l.id}"><div class="c">${esc(l.company)} ${l.sap_status === 'existing' ? '<span class="chip ok" title="Already an SAP customer">SAP</span>' : l.sap_status === 'possible' ? '<span class="chip warn" title="Possibly an SAP customer">SAP?</span>' : ''}</div><div class="m">${esc([l.contact, l.city].filter(Boolean).join(' · '))}</div>
         <div class="m">${esc(l.product || '')}${l.est_mt ? ` · ${num(l.est_mt)} MT/month` : ''}</div>
         ${l.next_action_at ? `<div class="m"><span class="chip ${d10(l.next_action_at) < t ? 'bad' : 'info'}">Next: ${fdate(l.next_action_at)}</span></div>` : ''}
         ${l.kyc_ref ? `<div class="m">Ledger form ${esc(l.kyc_ref)} · ${kycChip(l.kyc_status)}</div>` : ''}${l.lost_reason ? `<div class="m">Lost: ${esc(l.lost_reason)}</div>` : ''}</div>`).join('')}</div>`; }).join('');
@@ -949,26 +1110,39 @@ async function leadModal(l, d) {
   const acts = l.id ? (await api('/api/crm', { action: 'activities', lead_id: l.id })).rows : [];
   modal(`<h2>${l.id ? esc(l.company) : 'New lead'} ${l.id ? `<span class="chip">${STAGE_L[l.stage]}</span>` : ''}</h2>
     <div class="fg"><div class="f"><label>Company *</label><input id="lc" value="${esc(l.company || '')}"></div><div class="f"><label>Contact person</label><input id="lp" value="${esc(l.contact || '')}"></div>
+    <div class="f"><label>Designation</label><input id="lds" value="${esc(l.designation || '')}"></div>
     <div class="f"><label>Phone</label><input id="lph" value="${esc(l.phone || '')}"></div><div class="f"><label>Email</label><input id="le" value="${esc(l.email || '')}"></div>
-    <div class="f"><label>City</label><input id="lci" value="${esc(l.city || '')}"></div><div class="f"><label>Industry segment</label><select id="ls">${opts(M.segments, l.segment, '—')}</select></div>
+    <div class="f"><label>GSTIN</label><input id="lg" maxlength="15" style="text-transform:uppercase" value="${esc(l.gstin || '')}"></div>
+    <div class="f" style="grid-column:1/-1"><label>Address</label><input id="lad" value="${esc(l.address || '')}"></div>
+    <div class="f"><label>City</label><input id="lci" value="${esc(l.city || '')}"></div><div class="f"><label>State</label><input id="lstt" value="${esc(l.state || '')}"></div>
+    <div class="f"><label>Pincode</label><input id="lpi" maxlength="6" inputmode="numeric" value="${esc(l.pincode || '')}"></div><div class="f"><label>Industry segment</label><select id="ls">${opts(M.segments, l.segment, '—')}</select></div>
     <div class="f"><label>Product interest</label><select id="lpr">${opts(d.products, l.product, '—')}</select></div><div class="f"><label>Estimated MT / month</label><input id="lmt" type="number" min="0" step="0.5" value="${esc(l.est_mt ?? '')}"></div>
     <div class="f"><label>Source</label><select id="lso">${opts(d.sources, l.source, '—')}</select></div><div class="f"><label>Stage</label><select id="lst">${opts(d.stages.map(s => [s, STAGE_L[s]]), l.stage, null)}</select></div>
     <div class="f"><label>Lost reason</label><select id="llr">${opts(d.lostReasons, l.lost_reason, '—')}</select></div><div class="f"><label>Next action on</label><input id="lnx" type="date" value="${esc(d10(l.next_action_at))}"></div>
-    <div class="f"><label>Owner</label><select id="low">${opts(M.staff.map(s => [s.email, s.name || s.email]), l.owner_email || S.me.email, null)}</select></div><div class="f"><label>SAP code (once created)</label><input id="lcc" value="${esc(l.card_code || '')}" placeholder="e.g. C10234"></div></div>
+    <div class="f"><label>Owner</label><select id="low">${opts(M.staff.map(s => [s.email, s.name || s.email]), l.owner_email || S.me.key, null)}</select></div><div class="f"><label>SAP code (once created)</label><input id="lcc" value="${esc(l.card_code || '')}" placeholder="e.g. C10234"></div></div>
+    <div id="lSap" data-k="L${l.id || 'new'}-${Date.now()}" style="margin:0 0 10px">${l.id && l.sap_status ? sapBox({ status: l.sap_status, code: l.sap_status === 'existing' ? l.suggest_code : null, suggest: l.suggest_code, basis: l.match_basis }) : '<div class="small muted">SAP check runs when you fill company, GSTIN, phone or pincode.</div>'}</div>
     <div class="f"><label>Notes</label><textarea id="ln">${esc(l.notes || '')}</textarea></div>
     ${l.id ? `<h2 style="font-size:14px;margin-top:6px">Activity ${canEdit() ? '<button class="btn sm sec" id="lAct">+ Log</button>' : ''}</h2>${acts.length ? timeline(acts, true) : '<div class="muted small">No activity yet.</div>'}` : ''}
     <div class="err" id="lErr"></div>
-    <div class="acts">${l.id && isAdmin() ? '<button class="btn danger" id="lDel">Delete</button>' : ''}${l.id && canEdit() && !l.kyc_id ? '<button class="btn sec" id="lKyc">Send ledger form</button>' : ''}<span class="sp"></span>
+    <div class="acts">${l.id && isAdmin() ? '<button class="btn danger" id="lDel">Delete</button>' : ''}${l.id && canEdit() && !l.kyc_id ? '<button class="btn sec" id="lKyc">Send ledger form</button>' : ''}${l.id && canEdit() ? '<button class="btn sec" id="lEnq">+ Create enquiry</button>' : ''}<span class="sp"></span>
       <button class="btn sec" onclick="closeModal()">Close</button>${ro ? '' : '<button class="btn" id="lGo">Save</button>'}</div>`, 'wide');
   bindTimeline($('#modalRoot'), viewLeads, acts);
   if ($('#lAct')) $('#lAct').onclick = () => activityModal({ lead_id: l.id, type: 'call' }, () => { viewLeads(); });
   if ($('#lKyc')) $('#lKyc').onclick = () => inviteKyc({ company: l.company, phone: l.phone, email: l.email, contact_person: l.contact, lead_id: l.id });
+  if ($('#lEnq')) $('#lEnq').onclick = async () => { const ed = await api('/api/crm', { action: 'enq_list' });
+    enquiryModal(null, ed, { company: l.company, contact: l.contact, designation: l.designation, phone: l.phone, email: l.email, gstin: l.gstin, address: l.address, city: l.city, state: l.state, pincode: l.pincode,
+      source: 'Existing customer' === l.source ? l.source : '', lead_id: l.id, items: [{ product: l.product || '', unit: 'MT' }] }); };
+  let ltm = null; const lmk = $('#lSap')?.dataset.k;
+  const lcheck = () => { clearTimeout(ltm); ltm = setTimeout(async () => { if (!$('#lc') || !$('#lc').value.trim() || $('#lSap')?.dataset.k !== lmk) return;
+    try { const r = await api('/api/crm', { action: 'sap_check', lead_id: l.id, company: $('#lc').value, gstin: $('#lg').value, phone: $('#lph').value, email: $('#le').value, city: $('#lci').value, pincode: $('#lpi').value });
+      if ($('#lSap') && $('#lSap').dataset.k === lmk) $('#lSap').innerHTML = sapBox({ ...r, open_enquiries: r.open_enquiries, leads: [] }); } catch { /* ignore */ } }, 500); };
+  if (!ro) ['#lc', '#lg', '#lph', '#le', '#lci', '#lpi'].forEach(x => $(x).addEventListener('change', lcheck));
   if ($('#lDel')) $('#lDel').onclick = async () => { if (confirm('Delete this lead and its activity?')) { await api('/api/crm', { action: 'lead_delete', id: l.id }); closeModal(); viewLeads(); } };
   if ($('#lGo')) $('#lGo').onclick = async () => {
     try {
       await api('/api/crm', { action: 'lead_save', id: l.id, company: $('#lc').value, contact: $('#lp').value, phone: $('#lph').value, email: $('#le').value, city: $('#lci').value, segment: $('#ls').value,
         product: $('#lpr').value, est_mt: $('#lmt').value, source: $('#lso').value, stage: $('#lst').value, lost_reason: $('#llr').value, next_action_at: $('#lnx').value, owner_email: $('#low').value,
-        card_code: $('#lcc').value, notes: $('#ln').value });
+        card_code: $('#lcc').value, notes: $('#ln').value, designation: $('#lds').value, gstin: $('#lg').value, address: $('#lad').value, state: $('#lstt').value, pincode: $('#lpi').value });
       closeModal(); toast('Lead saved'); viewLeads();
     } catch (e) { $('#lErr').textContent = e.message; }
   };

@@ -4,6 +4,7 @@
 import { del } from '@vercel/blob';
 import { route, send, getSql, query } from './_lib.js';
 import { runMailSync } from './_mail.js';
+import { runReminders } from './_reminders.js';
 import { waitUntil } from '@vercel/functions';
 
 export default route(async (req, res) => {
@@ -12,11 +13,14 @@ export default route(async (req, res) => {
   // Mailbox reader: called every 15 minutes by an external cron job (cron-job.org / Task Scheduler).
   // Answers at once and keeps reading in the background (up to ~4 min), so short cron timeouts are fine.
   // Add &wait=1 to wait for the result instead.
+  if (query(req).get('job') === 'reminders') return send(res, 200, await runReminders());
   if (query(req).get('job') === 'mail') {
-    const run = runMailSync({ budgetMs: 240000, who: 'schedule' });
-    if (query(req).get('wait')) return send(res, 200, await run);
+    // the same 15-minute call also sends follow-up reminders (quick) before reading mail
+    let rem = null; try { rem = await runReminders(); } catch (e) { rem = { error: e.message }; }
+    const run = runMailSync({ budgetMs: 230000, who: 'schedule' });
+    if (query(req).get('wait')) return send(res, 200, { ...(await run), reminders: rem });
     waitUntil(run.catch(() => {}));
-    return send(res, 202, { ok: true, started: true, note: 'Reading mail in the background; see the Mail tab for the result' });
+    return send(res, 202, { ok: true, started: true, reminders: rem, note: 'Reading mail in the background; see the Mail tab for the result' });
   }
   const sql = getSql();
   const stale = await sql`SELECT id FROM crm_kyc WHERE status = 'draft' AND created_at < now() - interval '3 days'`;

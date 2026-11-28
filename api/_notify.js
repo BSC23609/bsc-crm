@@ -254,3 +254,16 @@ export async function sendFeedbackEmail(to, f, logoUrl) {
     return { ok: false, message: 'Email failed: ' + String(e.message).slice(0, 160) + (/535|auth/i.test(e.message) ? ' (check SMTP_USER / SMTP_PASS)' : '') };
   }
 }
+
+/* ---------------- Staff WhatsApp: enquiry assigned / transferred, follow-up reminder ---------------- */
+// Templates (WATI, category Utility). Body text is in README section 10.
+//   bsc_enquiry_assigned : {{name}} {{ref}} {{company}} {{details}} {{by}}
+//   bsc_followup_reminder: {{name}} {{customer}} {{task}} {{time}}
+export async function sendEnquiryAssigned(phone, f) {
+  return watiTemplate(phone, env('WATI_ENQ_TEMPLATE', 'bsc_enquiry_assigned'),
+    { name: f.name || 'Team', ref: f.ref, company: f.company, details: f.details || '-', by: f.by || 'CRM' }, 'crm_enq');
+}
+export async function sendFollowupReminder(phone, f) {
+  return watiTemplate(phone, env('WATI_FOLLOWUP_TEMPLATE', 'bsc_followup_reminder'),
+    { name: f.name || 'Team', customer: f.customer || '-', task: f.task || '-', time: f.time }, 'crm_fu');
+}

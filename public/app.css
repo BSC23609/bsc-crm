@@ -119,3 +119,7 @@ svg text{font-family:Inter,system-ui,sans-serif}
 .qbar .s{font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
 @media(max-width:760px){header{flex-wrap:wrap}.gsearch{order:3;max-width:none;flex-basis:100%}.who{display:none}nav{top:96px}main{padding:12px}.kv{grid-template-columns:1fr}.qbar{grid-template-columns:100px 1fr 44px}}
 @media print{header,nav,.toolbar,.btn{display:none!important}main{padding:0}}
+
+/* enquiry product lines */
+.irow input, .irow select { width: 100%; padding: 7px 9px; border: 1px solid var(--line, #d6dce5); border-radius: 7px; font: inherit; font-size: 13px; background: #fff; }
+.irow td { padding: 6px 6px; vertical-align: middle; }
