@@ -48,7 +48,8 @@ export const DEFAULT_CFG = {
   dormantDays: 90,               // no invoice for this many days = dormant
   leadSources: ['Website', 'WhatsApp', 'Phone call', 'Referral', 'Existing customer', 'IndiaMART', 'Exhibition', 'Field visit', 'Other'],
   products: ['HR Coil', 'HR Sheet / Plate', 'CR Coil / Sheet', 'Structural (Beam/Channel/Angle)', 'Chequered Plate', 'Slitting / CTL job work', 'Ready-to-use (base plates, flanges, webs, flats)', 'Other'],
-  lostReasons: ['Price', 'Delivery time', 'Grade / size not available', 'Credit terms', 'Went to competitor', 'Requirement dropped', 'Other']
+  lostReasons: ['Price', 'Delivery time', 'Grade / size not available', 'Credit terms', 'Went to competitor', 'Requirement dropped', 'Other'],
+  rejectReasons: ['MOQ not met', 'Product not available', 'Grade / size not available', 'Price not matching', 'Delivery timeline not possible', 'Credit / payment terms', 'Customer not responding', 'Went to competitor', 'Requirement dropped', 'Other']
 };
 export async function loadConfig() {
   const rows = await getSql()`SELECT data FROM crm_config WHERE id = 1`;
@@ -284,6 +285,15 @@ export function ensureSchema() {
       created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`;
     await sql`CREATE INDEX IF NOT EXISTS crm_enq_owner ON crm_enquiries(owner_email, status)`;
+    // Stages: received -> quoted | rejected (reason) -> order_received -> bp_created (set automatically when the customer appears in SAP)
+    await sql`ALTER TABLE crm_enquiries ADD COLUMN IF NOT EXISTS stage_log JSONB NOT NULL DEFAULT '[]'`;
+    await sql`ALTER TABLE crm_enquiries ADD COLUMN IF NOT EXISTS reject_note TEXT`;
+    await sql`ALTER TABLE crm_enquiries ADD COLUMN IF NOT EXISTS po_ref TEXT`;
+    await sql`ALTER TABLE crm_enquiries ADD COLUMN IF NOT EXISTS order_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE crm_enquiries ADD COLUMN IF NOT EXISTS bp_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE crm_enquiries ALTER COLUMN status SET DEFAULT 'received'`;
+    await sql`UPDATE crm_enquiries SET status = CASE status WHEN 'won' THEN 'order_received' WHEN 'lost' THEN 'rejected' WHEN 'quoted' THEN 'quoted' ELSE 'received' END
+      WHERE status IN ('new', 'in_progress', 'on_hold', 'won', 'lost')`;
     await sql`CREATE INDEX IF NOT EXISTS crm_enq_date ON crm_enquiries(enq_date DESC)`;
     // Follow-ups: date AND time, enquiry link, WhatsApp reminder bookkeeping
     await sql`ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS follow_up_ts TIMESTAMPTZ`;

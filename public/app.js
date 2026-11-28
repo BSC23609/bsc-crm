@@ -927,8 +927,9 @@ async function viewFollowups() {
 }
 
 /* ================================================================= ENQUIRIES (purchase requests) */
-const ENQ_L = { new: 'New', in_progress: 'In progress', quoted: 'Quoted', won: 'Won', lost: 'Lost', on_hold: 'On hold' };
-const ENQ_C = { new: 'info', in_progress: 'warn', quoted: 'info', won: 'ok', lost: 'bad', on_hold: '' };
+const ENQ_L = { received: 'Enquiry received', quoted: 'Quote shared', rejected: 'Rejected', order_received: 'Order received', bp_created: 'BP created' };
+const ENQ_C = { received: 'info', quoted: 'warn', rejected: 'bad', order_received: 'ok', bp_created: 'ok' };
+const ENQ_OPEN = ['received', 'quoted'];
 const UNITS = ['MT', 'Kg', 'Nos', 'Sheets', 'Coils', 'Mtr'];
 const itemsText = items => (items || []).map(x => [x.product, x.grade, x.size, x.qty ? `${x.qty} ${x.unit}` : ''].filter(Boolean).join(' ')).join('; ');
 // SAP check result box (leads + enquiries)
@@ -949,20 +950,22 @@ async function viewEnquiries() {
   if (EF.owner === '' && S.me.role === 'sales') EF.owner = S.me.key;
   const t = today(), m0 = t.slice(0, 7);
   const rows0 = d.rows;
-  const open = rows0.filter(e => !['won', 'lost'].includes(e.status));
+  const open = rows0.filter(e => ENQ_OPEN.includes(e.status));
+  const inM = v => v && d10(v).slice(0, 7) === m0;
   const k = { open: open.length, today: rows0.filter(e => d10(e.enq_date) === t).length, quoted: rows0.filter(e => e.status === 'quoted').length,
-    wonM: rows0.filter(e => e.status === 'won' && d10(e.updated_at).slice(0, 7) === m0).length,
+    ordersM: rows0.filter(e => ['order_received', 'bp_created'].includes(e.status) && inM(e.order_at || e.updated_at)).length,
+    awaitBp: rows0.filter(e => e.status === 'order_received').length, rejM: rows0.filter(e => e.status === 'rejected' && inM(e.updated_at)).length,
     overdue: open.filter(e => e.next_follow && new Date(e.next_follow) < new Date()).length, noFollow: open.filter(e => !e.next_follow).length,
     mt: open.reduce((a, e) => a + num(e.total_qty), 0) };
-  $('#main').innerHTML = `<h1 class="pg">Enquiries</h1><p class="pgsub">Purchase enquiries from customers. Each has an owner; transfer it to another salesperson from the form — they get a WhatsApp message.</p>
+  $('#main').innerHTML = `<h1 class="pg">Enquiries</h1><p class="pgsub">Purchase enquiries. Stages: <b>Enquiry received → Quote shared / Rejected → Order received → BP created</b> (BP created is set automatically when the customer appears in SAP). Transfer an enquiry from the form — the new owner gets a WhatsApp message.</p>
     <div class="kpis">
-      <div class="kpi"><div class="l">Open enquiries</div><div class="v">${k.open}</div><div class="s">${Math.round(k.mt).toLocaleString('en-IN')} MT</div></div>
-      <div class="kpi"><div class="l">Received today</div><div class="v">${k.today}</div></div>
-      <div class="kpi"><div class="l">Quoted</div><div class="v">${k.quoted}</div></div>
-      <div class="kpi"><div class="l">Won this month</div><div class="v">${k.wonM}</div></div>
+      <div class="kpi"><div class="l">Open enquiries</div><div class="v">${k.open}</div><div class="s">${Math.round(k.mt).toLocaleString('en-IN')} MT · ${k.today} received today</div></div>
+      <div class="kpi"><div class="l">Quote shared</div><div class="v">${k.quoted}</div><div class="s">waiting for the order</div></div>
+      <div class="kpi"><div class="l">Orders this month</div><div class="v">${k.ordersM}</div><div class="s">${k.rejM} rejected this month</div></div>
+      <div class="kpi ${k.awaitBp ? 'alert' : ''}"><div class="l">Awaiting BP in SAP</div><div class="v">${k.awaitBp}</div><div class="s">order received, customer not in SAP yet</div></div>
       <div class="kpi ${k.overdue ? 'alert' : ''}"><div class="l">Follow-up overdue</div><div class="v">${k.overdue}</div><div class="s">${k.noFollow} open with no follow-up set</div></div></div>
     <div class="toolbar"><input type="search" id="eq" placeholder="Search ref, company, contact, phone, product" value="${esc(EF.q)}">
-      <select id="es">${opts([['open', 'Open (not won/lost)'], ['all', 'All statuses'], ...d.statuses.map(x => [x, ENQ_L[x]])], EF.status, null)}</select>
+      <select id="es">${opts([['open', 'Open (received / quote shared)'], ['all', 'All stages'], ...d.statuses.map(x => [x, ENQ_L[x]])], EF.status, null)}</select>
       <select id="eo">${opts([[S.me.key, 'My enquiries'], ...S.meta.staff.filter(x => x.email !== S.me.key).map(x => [x.email, x.name || x.email])], EF.owner, 'All owners')}</select>
       <select id="esr">${opts(d.sources, EF.source, 'All sources')}</select>
       <span class="sp"></span>${canEdit() ? '<button class="btn" id="eNew">+ New enquiry</button>' : ''}<button class="btn sec" id="eX">Export Excel</button></div>
@@ -970,18 +973,19 @@ async function viewEnquiries() {
   let shown = [];
   const draw = () => {
     const q = norm(EF.q).trim();
-    shown = rows0.filter(e => (EF.status === 'all' || (EF.status === 'open' ? !['won', 'lost'].includes(e.status) : e.status === EF.status))
+    shown = rows0.filter(e => (EF.status === 'all' || (EF.status === 'open' ? ENQ_OPEN.includes(e.status) : e.status === EF.status))
       && (!EF.owner || e.owner_email === EF.owner) && (!EF.source || e.source === EF.source)
       && (!q || [e.ref, e.company, e.contact, e.phone, e.city, e.gstin, itemsText(e.items), e.sap_name].some(v => norm(v).includes(q))));
-    $('#eT').innerHTML = shown.length ? `<table><tr><th>Ref / date</th><th>Company</th><th>Requirement</th><th>Source</th><th>Owner</th><th>Status</th><th>Next follow-up</th></tr>
+    $('#eT').innerHTML = shown.length ? `<table><tr><th>Ref / date</th><th>Company</th><th>Requirement</th><th>Source</th><th>Owner</th><th>Stage</th><th>Next follow-up</th></tr>
       ${shown.map(e => { const od = e.next_follow && new Date(e.next_follow) < new Date(); return `<tr class="click" data-enq="${e.id}">
         <td class="nowrap"><b>${esc(e.ref)}</b><div class="small muted">${fdate(e.enq_date)}</div></td>
         <td><b>${esc(e.company)}</b><div class="small muted">${esc([e.contact, e.city].filter(Boolean).join(' · '))}</div>
           <div class="small">${e.sap_status === 'existing' ? `<span class="chip ok">SAP ${esc(e.card_code)}</span>` : e.sap_status === 'possible' ? `<span class="chip warn">Check SAP: ${esc(e.suggest_code)}</span>` : '<span class="chip info">New customer</span>'}</div></td>
         <td class="small" style="max-width:300px">${esc(itemsText(e.items))}${e.total_qty ? `<div class="muted">${num(e.total_qty).toLocaleString('en-IN')} MT</div>` : ''}</td>
         <td class="small">${esc(e.source || '')}</td><td class="small">${esc(staffName(e.owner_email))}${e.transfers ? ` <span class="muted" title="transferred">↪${e.transfers}</span>` : ''}</td>
-        <td><span class="chip ${ENQ_C[e.status]}">${ENQ_L[e.status]}</span>${e.quote_value ? `<div class="small muted">${inrShort(e.quote_value)}</div>` : ''}</td>
-        <td class="nowrap small">${e.next_follow ? `<span class="chip ${od ? 'bad' : 'info'}">${fdt(e.next_follow)}</span>` : (['won', 'lost'].includes(e.status) ? '' : '<span class="muted">not set</span>')}</td></tr>`; }).join('')}</table>`
+        <td><span class="chip ${ENQ_C[e.status]}">${ENQ_L[e.status] || e.status}</span>${e.status === 'bp_created' ? `<div class="small"><a href="#/c/${encodeURIComponent(e.card_code)}">${esc(e.card_code)}</a></div>` : ''}
+          ${e.status === 'order_received' ? '<div class="small muted">awaiting BP</div>' : ''}${e.status === 'rejected' ? `<div class="small muted">${esc(e.lost_reason || '')}</div>` : ''}${e.quote_value && e.status === 'quoted' ? `<div class="small muted">${inrShort(e.quote_value)}</div>` : ''}</td>
+        <td class="nowrap small">${e.next_follow ? `<span class="chip ${od ? 'bad' : 'info'}">${fdt(e.next_follow)}</span>` : (ENQ_OPEN.includes(e.status) ? '<span class="muted">not set</span>' : '')}</td></tr>`; }).join('')}</table>`
       : '<div class="card empty">No enquiries here yet.</div>';
     $$('[data-enq]').forEach(r => r.onclick = () => enquiryModal(+r.dataset.enq, d));
   };
@@ -995,15 +999,16 @@ async function viewEnquiries() {
     { h: 'Mobile', k: 'phone', w: 13 }, { h: 'Email', k: 'email', w: 24 }, { h: 'City', k: 'city', w: 13 }, { h: 'GSTIN', k: 'gstin', w: 17 },
     { h: 'SAP', v: r => r.sap_status === 'existing' ? 'Existing ' + r.card_code : r.sap_status === 'possible' ? 'Check ' + r.suggest_code : 'New', w: 16 },
     { h: 'Requirement', v: r => itemsText(r.items), w: 44 }, { h: 'Qty (MT)', k: 'total_qty', fmt: 'num', total: true, w: 10 }, { h: 'Source', k: 'source', w: 18 },
-    { h: 'Owner', v: r => staffName(r.owner_email), w: 20 }, { h: 'Status', v: r => ENQ_L[r.status], w: 11 }, { h: 'Quote (₹)', k: 'quote_value', fmt: 'inr', w: 14 },
-    { h: 'Lost reason', k: 'lost_reason', w: 18 }, { h: 'Next follow-up', v: r => r.next_follow ? fdt(r.next_follow) : '', w: 18 }], shown,
+    { h: 'Owner', v: r => staffName(r.owner_email), w: 20 }, { h: 'Stage', v: r => ENQ_L[r.status], w: 16 }, { h: 'Quote (₹)', k: 'quote_value', fmt: 'inr', w: 14 },
+    { h: 'Rejection reason', v: r => [r.lost_reason, r.reject_note].filter(Boolean).join(' – '), w: 24 }, { h: 'PO ref', k: 'po_ref', w: 14 }, { h: 'Order date', k: 'order_at', fmt: 'date', w: 12 },
+    { h: 'BP created', k: 'bp_at', fmt: 'date', w: 12 }, { h: 'SAP code', k: 'card_code', w: 11 }, { h: 'Next follow-up', v: r => r.next_follow ? fdt(r.next_follow) : '', w: 18 }], shown,
     `Bharat Steel (Chennai) Pvt. Ltd. — Enquiries — ${fdate(today())}`);
   draw();
   const focus = S.hq.get('id'); if (focus) enquiryModal(+focus, d);
 }
 async function enquiryModal(id, d, pre = {}) {
   const M = S.meta, ed = canEdit();
-  const g = id ? await api('/api/crm', { action: 'enq_get', id }) : { enquiry: { status: 'new', items: [{ unit: 'MT' }], owner_email: S.me.key, enq_date: today(), ...pre }, activities: [] };
+  const g = id ? await api('/api/crm', { action: 'enq_get', id }) : { enquiry: { status: 'received', items: [{ unit: 'MT' }], owner_email: S.me.key, enq_date: today(), ...pre }, activities: [] };
   const e = g.enquiry, staffOpts = M.staff.map(x => [x.email, (x.name || x.email) + (x.designation ? ' — ' + x.designation : '')]);
   const itemRow = (x = {}) => `<tr class="irow"><td><input class="iP" list="prodList" value="${esc(x.product || '')}" placeholder="Product"></td><td><input class="iG" value="${esc(x.grade || '')}" placeholder="E250 / IS2062"></td>
     <td><input class="iS" value="${esc(x.size || '')}" placeholder="10mm x 2500 x 6300"></td><td><input class="iQ" type="number" min="0" step="any" value="${esc(x.qty || '')}" style="width:90px"></td>
@@ -1020,6 +1025,7 @@ async function enquiryModal(id, d, pre = {}) {
       <div class="f" style="grid-column:1/-1"><label>Address</label><input id="eA" value="${esc(e.address || '')}"></div>
       <div class="f"><label>City</label><input id="eCi" value="${esc(e.city || '')}"></div><div class="f"><label>State</label><input id="eSt" value="${esc(e.state || 'Tamil Nadu')}"></div>
       <div class="f"><label>Pincode</label><input id="ePi" inputmode="numeric" maxlength="6" value="${esc(e.pincode || '')}"></div></div>
+    ${id && e.sap_status === 'possible' && e.suggest_code ? `<div class="toolbar" style="margin:0 0 6px"><span class="small">Is this <b>${esc(e.sap_name || e.suggest_code)}</b>?</span><button class="btn sm sec" id="eLink" data-code="${esc(e.suggest_code)}">Yes, link ${esc(e.suggest_code)}</button><input id="eCode" placeholder="or type SAP code" style="width:150px"><button class="btn sm sec" id="eLink2">Link</button></div>` : ''}
     <div id="eSap" data-k="${id || 'new'}-${Date.now()}" style="margin:4px 0 10px">${id ? sapBox({ status: e.sap_status, code: e.card_code, suggest: e.suggest_code, basis: e.match_basis, name: e.sap_name }) : '<div class="small muted">The SAP check runs when you fill company, GSTIN, mobile or pincode.</div>'}</div>
     <h3>Requirement</h3>
     <datalist id="prodList">${(M.products || []).map(p => `<option value="${esc(p)}">`).join('')}</datalist>
@@ -1035,9 +1041,14 @@ async function enquiryModal(id, d, pre = {}) {
     <div class="fg"><div class="f"><label>Enquiry owner *</label><select id="eO">${opts(staffOpts, e.owner_email || S.me.key, null)}</select></div>
       <div class="f"><label>Transfer to</label><select id="eT2">${opts(staffOpts.filter(x => x[0] !== e.owner_email), '', '— keep with owner —')}</select></div>
       <div class="f"><label>Transfer note</label><input id="eTn" placeholder="why / what to do"></div>
-      <div class="f"><label>Status</label><select id="eS">${opts(d.statuses.map(x => [x, ENQ_L[x]]), e.status, null)}</select></div>
-      <div class="f"><label>Quote value (₹)</label><input id="eQv" type="number" min="0" value="${esc(e.quote_value ?? '')}"></div>
-      <div class="f"><label>Lost reason</label><select id="eLr">${opts(M.lostReasons || [], e.lost_reason, '—')}</select></div></div>
+      <div class="f"><label>Stage</label>${e.status === 'bp_created' ? `<div style="padding:9px 0"><span class="chip ok">BP created</span> <a href="#/c/${encodeURIComponent(e.card_code)}" target="_blank">${esc(e.card_code)}</a></div><input type="hidden" id="eS" value="order_received">`
+        : `<select id="eS">${opts(d.pick.map(x => [x, ENQ_L[x]]), e.status, null)}</select>`}</div></div>
+    <div class="fg" id="eStageQ"><div class="f"><label>Quote value (₹) *</label><input id="eQv" type="number" min="0" value="${esc(e.quote_value ?? '')}"></div></div>
+    <div class="fg" id="eStageR"><div class="f"><label>Rejection reason *</label><select id="eLr">${opts(d.rejectReasons || [], e.lost_reason, '—')}</select></div>
+      <div class="f" style="grid-column:span 2"><label>Details</label><input id="eRn" value="${esc(e.reject_note || '')}" placeholder="e.g. Customer needs 2 MT, our MOQ is 5 MT"></div></div>
+    <div class="fg" id="eStageO"><div class="f"><label>Customer PO / order ref</label><input id="ePo" value="${esc(e.po_ref || '')}"></div>
+      <div class="f" style="grid-column:span 2"><div id="eBpNote" class="small" style="padding-top:22px"></div></div></div>
+    ${(e.stage_log || []).length ? `<p class="small muted">Stage history: ${e.stage_log.map(x => `<b>${esc(ENQ_L[x.status] || x.status)}</b> ${fdt(x.at)} (${esc(x.by === 'SAP' ? 'SAP sync' : staffName(x.by))})`).join(' → ')}</p>` : ''}
     ${(e.transfers || []).length ? `<p class="small muted">Transfers: ${e.transfers.map(t => `${esc(staffName(t.from))} → <b>${esc(staffName(t.to))}</b> (${fdt(t.at)}${t.note ? ', ' + esc(t.note) : ''})`).join(' · ')}</p>` : ''}
     <h3>Next follow-up</h3>
     <div class="fg"><div class="f"><label>Date</label><input type="date" id="eFd" min="${today()}"></div><div class="f"><label>Time</label><input type="time" id="eFt"></div>
@@ -1047,7 +1058,16 @@ async function enquiryModal(id, d, pre = {}) {
     <div class="err" id="eErr"></div>
     <div class="acts">${id && isAdmin() ? '<button class="btn danger" id="eDel">Delete</button>' : ''}${id && ed && e.sap_status !== 'existing' ? '<button class="btn sec" id="eKyc">Send ledger form</button>' : ''}<span class="sp"></span>
       <button class="btn sec" onclick="closeModal()">Close</button>${ed ? `<button class="btn" id="eGo">${id ? 'Save' : 'Create enquiry'}</button>` : ''}</div>`, 'wide');
+  let linkCode = '';
+  const stageUi = () => { const st = $('#eS').value, bp = e.status === 'bp_created';
+    $('#eStageQ').style.display = st === 'quoted' ? '' : 'none'; $('#eStageR').style.display = st === 'rejected' ? '' : 'none';
+    $('#eStageO').style.display = st === 'order_received' || bp ? '' : 'none';
+    $('#eBpNote').innerHTML = bp ? `✅ BP created in SAP ${fdt(e.bp_at)} — ${esc(e.card_code)}` : e.sap_status === 'existing' || linkCode ? '✅ Customer already in SAP — saving moves this to <b>BP created</b>.'
+      : '⏳ After saving, the CRM watches SAP (every 15 minutes) and moves this to <b>BP created</b> as soon as the customer\'s BP appears.'; };
+  stageUi(); if ($('#eS').tagName === 'SELECT') $('#eS').onchange = stageUi;
   if (!ed) { $$('.modal input,.modal select,.modal textarea').forEach(i => i.disabled = true); return; }
+  if ($('#eLink')) $('#eLink').onclick = () => { linkCode = $('#eLink').dataset.code; toast('Will link ' + linkCode + ' when you save'); stageUi(); };
+  if ($('#eLink2')) $('#eLink2').onclick = () => { linkCode = $('#eCode').value.trim(); if (linkCode) { toast('Will link ' + linkCode + ' when you save'); stageUi(); } };
   const bindRows = () => $$('.iX').forEach(b => b.onclick = () => { if ($$('.irow').length > 1) b.closest('tr').remove(); });
   $('#eAdd').onclick = () => { $('#eItems').insertAdjacentHTML('beforeend', itemRow({})); bindRows(); }; bindRows();
   let tmr = null; const mk = $('#eSap').dataset.k;   // results only land in the form that asked for them
@@ -1073,7 +1093,7 @@ async function enquiryModal(id, d, pre = {}) {
         gstin: $('#eG').value, address: $('#eA').value, city: $('#eCi').value, state: $('#eSt').value, pincode: $('#ePi').value, items, enq_date: $('#eDt').value,
         required_by: $('#eRb').value, delivery_at: $('#eDl').value, source: $('#eSo').value, source_detail: $('#eSd').value, remarks: $('#eR').value,
         owner_email: $('#eO').value, transfer_to: $('#eT2').value, transfer_note: $('#eTn').value, status: $('#eS').value, quote_value: $('#eQv').value,
-        lost_reason: $('#eLr').value, follow_up_at: $('#eFd').value, follow_up_time: $('#eFt').value, follow_up_note: $('#eFn').value, lead_id: e.lead_id || pre.lead_id });
+        lost_reason: $('#eLr').value, reject_note: $('#eRn').value, po_ref: $('#ePo').value, card_code: linkCode, follow_up_at: $('#eFd').value, follow_up_time: $('#eFt').value, follow_up_note: $('#eFn').value, lead_id: e.lead_id || pre.lead_id });
       const n = (r.notified || []).map(x => `${x.ok ? '💬 WhatsApp sent to' : '⚠️ WhatsApp not sent to'} ${x.to}${x.ok ? '' : ': ' + x.message}`).join(' · ');
       toast(`${r.ref} saved${n ? ' — ' + n : ''}`, n && n.includes('⚠️') ? 6000 : 3000);
       closeModal(); refreshBadges(); viewEnquiries();

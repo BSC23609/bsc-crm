@@ -7,7 +7,10 @@ import { sendEnquiryAssigned } from './_notify.js';
 
 const TYPES = ['call', 'visit', 'whatsapp', 'email', 'meeting', 'complaint', 'note'];
 const STAGES = ['new', 'contacted', 'quoted', 'negotiation', 'won', 'lost'];
-const ENQ_STATUS = ['new', 'in_progress', 'quoted', 'won', 'lost', 'on_hold'];
+// Enquiry stages. bp_created is set by the CRM, never chosen by hand: when an order_received enquiry's customer is in SAP.
+const ENQ_STATUS = ['received', 'quoted', 'rejected', 'order_received', 'bp_created'];
+const ENQ_PICK = ['received', 'quoted', 'rejected', 'order_received'];
+const ENQ_OPEN = ['received', 'quoted'];
 const ENQ_SOURCES = ['Phone call', 'Walk-in', 'Email', 'WhatsApp', 'Website – organic', 'Website – paid campaign', 'Google Ads', 'IndiaMART', 'Reference', 'Existing customer', 'Sales visit', 'Other'];
 // follow-up date (YYYY-MM-DD) + optional time (HH:MM, IST) -> timestamptz
 const followTs = (date, time) => (/^\d{4}-\d{2}-\d{2}$/.test(date || '') && /^\d{2}:\d{2}$/.test(time || '')) ? `${date}T${time}:00+05:30` : null;
@@ -23,7 +26,7 @@ export default route(async (req, res) => {
     const cfg = await loadConfig();
     const staff = await sql`SELECT COALESCE(email, 'emp:' || lower(emp_code), 'uid:' || id) AS email, name, role, designation, dept FROM crm_users WHERE active AND role <> 'viewer' ORDER BY name, email`;
     return send(res, 200, { segments: SEGMENTS, buyerTypes: BUYER_TYPES, usage: USAGE, regTypes: REG_TYPES, stages: STAGES, types: TYPES,
-      sources: cfg.leadSources, products: cfg.products, lostReasons: cfg.lostReasons, discountPerTon: cfg.discountPerTon,
+      sources: cfg.leadSources, products: cfg.products, lostReasons: cfg.lostReasons, rejectReasons: cfg.rejectReasons, discountPerTon: cfg.discountPerTon,
       dormantDays: cfg.dormantDays, lowScore: cfg.lowScore, staff, sapConnected: (await sapStatus()).connected, emailReady: emailReady(), whatsappReady: whatsappReady(), appUrl: appUrl() });
   }
 
@@ -163,7 +166,7 @@ export default route(async (req, res) => {
     const r = await sapCheck(sql, { company: clean(b.company, 200), gstin: clean(b.gstin, 15).toUpperCase(), phone: b.phone, email: b.email, city: clean(b.city, 80), pincode: b.pincode });
     const g = clean(b.gstin, 15).toUpperCase(), digits = phoneDigits(b.phone).slice(-10), nm = clean(b.company, 200).toLowerCase();
     const dup = (g || digits || nm) ? await sql`SELECT id, ref, company, status, enq_date, owner_email FROM crm_enquiries
-        WHERE id <> ${Number(b.id) || 0} AND status NOT IN ('won', 'lost') AND enq_date > CURRENT_DATE - 90
+        WHERE id <> ${Number(b.id) || 0} AND status IN ('received', 'quoted') AND enq_date > CURRENT_DATE - 90
           AND ((${g} <> '' AND gstin = ${g}) OR (${digits} <> '' AND right(phone, 10) = ${digits}) OR (${nm} <> '' AND lower(company) = ${nm}))
         ORDER BY enq_date DESC LIMIT 5` : [];
     const leads = (g || digits || nm) ? await sql`SELECT id, company, stage FROM crm_leads WHERE id <> ${Number(b.lead_id) || 0}
@@ -172,14 +175,14 @@ export default route(async (req, res) => {
   }
   if (b.action === 'enq_list') {
     const rows = await sql`SELECT e.id, e.ref, e.enq_date, e.company, e.contact, e.phone, e.email, e.city, e.state, e.gstin, e.source, e.items, e.total_qty::float AS total_qty,
-        e.required_by, e.status, e.quote_value::float AS quote_value, e.lost_reason, e.owner_email, e.card_code, e.sap_status, e.match_basis, e.suggest_code, e.lead_id,
+        e.required_by, e.status, e.quote_value::float AS quote_value, e.lost_reason, e.reject_note, e.po_ref, e.order_at, e.bp_at, e.owner_email, e.card_code, e.sap_status, e.match_basis, e.suggest_code, e.lead_id,
         e.created_by, e.created_at, e.updated_at, jsonb_array_length(e.transfers) AS transfers,
         COALESCE(c.name, s2.name) AS sap_name,
         (SELECT MIN(COALESCE(a.follow_up_ts, (a.follow_up_at + time '09:30') AT TIME ZONE 'Asia/Kolkata')) FROM crm_activities a WHERE a.enquiry_id = e.id AND NOT a.done AND a.follow_up_at IS NOT NULL) AS next_follow,
         (SELECT MAX(a.created_at) FROM crm_activities a WHERE a.enquiry_id = e.id) AS last_activity
       FROM crm_enquiries e LEFT JOIN crm_customers c ON c.card_code = e.card_code LEFT JOIN crm_customers s2 ON s2.card_code = e.suggest_code
       ORDER BY e.enq_date DESC, e.id DESC LIMIT 3000`;
-    return send(res, 200, { rows, statuses: ENQ_STATUS, sources: ENQ_SOURCES });
+    return send(res, 200, { rows, statuses: ENQ_STATUS, pick: ENQ_PICK, sources: ENQ_SOURCES, rejectReasons: (await loadConfig()).rejectReasons });
   }
   if (b.action === 'enq_get') {
     const [e] = await sql`SELECT e.*, e.total_qty::float AS total_qty, e.quote_value::float AS quote_value, COALESCE(c.name, s2.name) AS sap_name
@@ -338,8 +341,10 @@ export default route(async (req, res) => {
     if (phone.replace(/^(91|0)(?=\d{10}$)/, '').length < 10) return send(res, 400, { error: 'Enter a valid mobile number' });
     const gstin = clean(b.gstin, 15).toUpperCase() || null;
     if (gstin) { const e = gstinProblem(gstin); if (e) return send(res, 400, { error: e }); }
-    const status = ENQ_STATUS.includes(b.status) ? b.status : 'new';
-    if (status === 'lost' && !clean(b.lost_reason, 120)) return send(res, 400, { error: 'Pick why the enquiry was lost' });
+    let status = ENQ_PICK.includes(b.status) ? b.status : 'received';
+    if (status === 'rejected' && !clean(b.lost_reason, 120)) return send(res, 400, { error: 'Pick the rejection reason' });
+    if (status === 'rejected' && clean(b.lost_reason, 120) === 'Other' && !clean(b.reject_note, 300)) return send(res, 400, { error: 'Write the rejection reason' });
+    if (status === 'quoted' && !(Number(b.quote_value) > 0)) return send(res, 400, { error: 'Enter the quote value when marking Quote shared' });
     const items = (Array.isArray(b.items) ? b.items : []).slice(0, 30).map(x => ({ product: clean(x.product, 120), grade: clean(x.grade, 40), size: clean(x.size, 80),
       qty: Math.max(0, Number(x.qty) || 0), unit: ['MT', 'Kg', 'Nos', 'Sheets', 'Coils', 'Mtr'].includes(x.unit) ? x.unit : 'MT' })).filter(x => x.product);
     if (!items.length) return send(res, 400, { error: 'Add at least one product line' });
@@ -354,18 +359,26 @@ export default route(async (req, res) => {
       source: ENQ_SOURCES.includes(b.source) ? b.source : 'Other', source_detail: clean(b.source_detail, 160) || null,
       required_by: dateOrNull(b.required_by), delivery_at: clean(b.delivery_at, 200) || null, remarks: cleanMulti(b.remarks, 4000) || null,
       quote: b.quote_value === '' || b.quote_value == null ? null : Math.max(0, Number(b.quote_value) || 0),
-      lost: status === 'lost' ? clean(b.lost_reason, 120) : null, lead: Number(b.lead_id) || null, enq_date: dateOrNull(b.enq_date) };
+      lost: status === 'rejected' ? clean(b.lost_reason, 120) : null, reject_note: status === 'rejected' ? clean(b.reject_note, 300) || null : null,
+      po_ref: clean(b.po_ref, 80) || null, lead: Number(b.lead_id) || null, enq_date: dateOrNull(b.enq_date) };
     const chk = await sapCheck(sql, { company, gstin, phone, email: v.email, city: v.city, pincode: v.pincode });
-    const card = chk.status === 'existing' ? chk.code : (clean(b.card_code, 40) || null);
+    let card = chk.status === 'existing' ? chk.code : null;
+    const linkCode = clean(b.card_code, 40);   // staff linking a "possible" SAP match by hand
+    if (linkCode) { const [c] = await sql`SELECT card_code FROM crm_customers WHERE upper(card_code) = ${linkCode.toUpperCase()} AND in_sap`; if (!c) return send(res, 400, { error: 'No SAP customer with code ' + linkCode }); card = c.card_code; }
     let id = Number(b.id) || null, prev = null, ref;
+    // order received + customer already in SAP (BP made earlier, e.g. for an SAP quote) -> straight to BP created
+    if (status === 'order_received' && card) status = 'bp_created';
     if (id) {
-      [prev] = await sql`SELECT owner_email, ref FROM crm_enquiries WHERE id = ${id}`;
+      [prev] = await sql`SELECT owner_email, ref, status, card_code FROM crm_enquiries WHERE id = ${id}`;
       if (!prev) throw fail(404, 'Enquiry not found');
       ref = prev.ref;
+      if (!card && prev.card_code && prev.status === 'bp_created') card = prev.card_code;
+      if (status === 'order_received' && prev.status === 'bp_created') status = 'bp_created';
       await sql`UPDATE crm_enquiries SET enq_date = COALESCE(${v.enq_date}::date, enq_date), company = ${company}, contact = ${contact}, designation = ${v.designation}, phone = ${phone}, email = ${v.email},
           gstin = ${gstin}, address = ${v.address}, city = ${v.city}, state = ${v.state}, pincode = ${v.pincode}, source = ${v.source}, source_detail = ${v.source_detail},
           items = ${JSON.stringify(items)}::jsonb, total_qty = ${total || null}, required_by = ${v.required_by}, delivery_at = ${v.delivery_at}, remarks = ${v.remarks},
-          status = ${status}, quote_value = ${v.quote}, lost_reason = ${v.lost}, owner_email = ${owner}, card_code = ${card}, sap_status = ${chk.status},
+          status = ${status}, quote_value = ${v.quote}, lost_reason = ${v.lost}, reject_note = ${v.reject_note}, po_ref = ${v.po_ref}, owner_email = ${owner}, card_code = ${card},
+          sap_status = ${card ? 'existing' : chk.status},
           match_basis = ${chk.basis || null}, suggest_code = ${chk.code || chk.suggest || null}, lead_id = ${v.lead}, updated_at = now() WHERE id = ${id}`;
     } else {
       const yy = String(new Date(Date.now() + 330 * 6e4).getUTCFullYear()).slice(2);
@@ -377,10 +390,17 @@ export default route(async (req, res) => {
               items, total_qty, required_by, delivery_at, remarks, status, quote_value, lost_reason, owner_email, card_code, sap_status, match_basis, suggest_code, lead_id, created_by)
             VALUES (${ref}, COALESCE(${v.enq_date}::date, CURRENT_DATE), ${company}, ${contact}, ${v.designation}, ${phone}, ${v.email}, ${gstin}, ${v.address}, ${v.city}, ${v.state}, ${v.pincode},
               ${v.source}, ${v.source_detail}, ${JSON.stringify(items)}::jsonb, ${total || null}, ${v.required_by}, ${v.delivery_at}, ${v.remarks}, ${status}, ${v.quote}, ${v.lost},
-              ${owner}, ${card}, ${chk.status}, ${chk.basis || null}, ${chk.code || chk.suggest || null}, ${v.lead}, ${me.email}) RETURNING id`;
+              ${owner}, ${card}, ${card ? 'existing' : chk.status}, ${chk.basis || null}, ${chk.code || chk.suggest || null}, ${v.lead}, ${me.email}) RETURNING id`;
+          await sql`UPDATE crm_enquiries SET reject_note = ${v.reject_note}, po_ref = ${v.po_ref} WHERE id = ${id}`;
         } catch (e) { if (!/duplicate key/.test(e.message)) throw e; }
       }
       if (!id) throw fail(500, 'Could not number the enquiry, please try again');
+    }
+    // stage history + order / BP timestamps
+    if (!prev || prev.status !== status) {
+      await sql`UPDATE crm_enquiries SET stage_log = stage_log || ${JSON.stringify([{ status, at: new Date().toISOString(), by: me.email }])}::jsonb,
+          order_at = CASE WHEN ${status} IN ('order_received', 'bp_created') THEN COALESCE(order_at, now()) ELSE order_at END,
+          bp_at = CASE WHEN ${status} = 'bp_created' THEN COALESCE(bp_at, now()) ELSE bp_at END WHERE id = ${id}`;
     }
     // first follow-up straight from the form
     const due = dateOrNull(b.follow_up_at);

@@ -3,6 +3,7 @@
 // Only follow-ups that fell due in the last 6 hours are sent, so a long outage never floods anyone.
 import { getSql, audit } from './_lib.js';
 import { sendFollowupReminder } from './_notify.js';
+import { bpCheck } from './_mail.js';
 
 const IST = 330 * 60000;
 const fmtWhen = d => new Date(new Date(d).getTime() + IST).toISOString().replace(/^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d).*/, (m, y, mo, da, h, mi) => {
@@ -10,6 +11,7 @@ const fmtWhen = d => new Date(new Date(d).getTime() + IST).toISOString().replace
 
 export async function runReminders() {
   const sql = getSql();
+  let bp = null; try { bp = await bpCheck(sql); } catch (e) { bp = { error: e.message }; }   // order received -> BP created
   const due = await sql`
     SELECT a.id, a.subject, a.type, a.owner_email, a.card_code, a.lead_id, a.enquiry_id,
       COALESCE(a.follow_up_ts, (a.follow_up_at + time '09:30') AT TIME ZONE 'Asia/Kolkata') AS due_at,
@@ -22,7 +24,7 @@ export async function runReminders() {
       AND COALESCE(a.follow_up_ts, (a.follow_up_at + time '09:30') AT TIME ZONE 'Asia/Kolkata') <= now()
       AND COALESCE(a.follow_up_ts, (a.follow_up_at + time '09:30') AT TIME ZONE 'Asia/Kolkata') > now() - interval '6 hours'
     ORDER BY due_at LIMIT 60`;
-  if (!due.length) return { reminders: 0 };
+  if (!due.length) return { reminders: 0, bp };
   const keys = [...new Set(due.map(d => d.owner_email).filter(Boolean))];
   const staff = keys.length ? await sql`SELECT COALESCE(email, 'emp:' || lower(emp_code), 'uid:' || id) AS k, name, mobile FROM crm_users
     WHERE active AND COALESCE(email, 'emp:' || lower(emp_code), 'uid:' || id) = ANY(${keys}::text[])` : [];
@@ -37,5 +39,5 @@ export async function runReminders() {
     if (r.ok) sent++;
   }
   await audit('cron', 'followup_reminders', { due: due.length, sent });
-  return { reminders: sent, due: due.length };
+  return { reminders: sent, due: due.length, bp };
 }

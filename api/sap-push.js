@@ -6,6 +6,7 @@
 // 'replace' = this run sends the whole section; on the batch marked last, rows not sent in this run are removed.
 import crypto from 'node:crypto';
 import { route, send, readBody, getSql, panOf } from './_lib.js';
+import { bpCheck } from './_mail.js';
 
 const d = v => (v ? String(v).slice(0, 10) : null);
 const num = v => Number(v) || 0;
@@ -104,11 +105,13 @@ export default route(async (req, res) => {
     await sql`UPDATE crm_kyc k SET card_code = c.card_code, status = 'created', updated_at = now()
               FROM crm_customers c WHERE k.card_code IS NULL AND k.status IN ('submitted','review','approved')
                 AND k.gstin IS NOT NULL AND c.gstin = k.gstin AND c.in_sap`;
+    // enquiries waiting for their BP: move to "BP created" once the customer is in SAP
+    let bp = null; try { bp = await bpCheck(sql); } catch (e) { bp = { error: e.message }; }
     const msg = Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ') || 'ok';
     await sql`INSERT INTO crm_sync (id, at, ok, message, count, full_at) VALUES (1, now(), true, ${msg}, ${num(counts.customers) || null}, ${b.full ? new Date().toISOString() : null})
               ON CONFLICT (id) DO UPDATE SET at = now(), ok = true, message = EXCLUDED.message,
                 count = COALESCE(EXCLUDED.count, crm_sync.count), full_at = COALESCE(EXCLUDED.full_at, crm_sync.full_at)`;
-    return send(res, 200, { ok: true, feedbackMatched: matched });
+    return send(res, 200, { ok: true, feedbackMatched: matched, bp });
   }
 
   const rows = Array.isArray(b.rows) ? b.rows : [];

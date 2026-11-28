@@ -15,7 +15,7 @@
 | **Leads** | Pipeline board (New → Contacted → Quoted → Negotiation → Won / Lost) with MT/month potential, lost reasons, activity, and "send ledger form" when won |
 | **Receivables** | Open invoices from the same `receivables.csv` the MIS portal uses: ageing, overdue / over-60 totals, by executive, per-customer bills, WhatsApp payment reminder, log a payment call, Excel export |
 | **Mail** | info@bharatsteels.in read by Claude every 15 min: customer mails only, one data sheet per company (contact, phones, GSTIN, address, requirement), checked against SAP (In SAP / Check match / New), one-click lead or ledger form, Excel export, full log of every mail (section 7) |
-| **Enquiries** | Purchase enquiries with product lines, source, owner and transfer (WhatsApp to the new owner), SAP check, follow-up date + time with WhatsApp reminder, Excel export (section 10) |
+| **Enquiries** | Purchase enquiries with product lines, source, stages (received → quote shared / rejected → order received → BP created, auto from SAP), owner and transfer (WhatsApp to the new owner), SAP check, follow-up date + time with WhatsApp reminder, Excel export (section 10) |
 | **Admin** | Users & roles (Admin / Sales / Viewer), link users to their SAP sales employee, settings (discount, low-score level, dormant days, lead sources, products), activity log |
 
 SAP is **read-only** from the CRM — nothing is written to SAP.
@@ -167,6 +167,12 @@ Every send is logged on the row ("Feedback sent") and as an activity on the cust
 ### 10. Enquiries, SAP check and follow-up reminders
 
 - **Enquiries** tab: purchase enquiries (separate from **Leads**, which is the marketing database of prospects). Each enquiry has a number (ENQ-26-0001), product lines, source, an **Enquiry owner** and **Transfer to**. The owner gets a WhatsApp message when an enquiry is given to them or transferred to them, and open follow-ups move with it.
+- **Stages** (marked by the sales user in the enquiry form):
+  1. **Enquiry received**: the starting stage.
+  2. **Quote shared** (quote value required) or **Rejected** (reason required: MOQ not met, Product not available, Price not matching… with a details box; "Other" needs the details). Edit the reasons in Admin → settings `rejectReasons`.
+  3. **Order received** (optional customer PO ref).
+  4. **BP created**: set automatically, never picked by hand. When an order is marked received, the CRM checks SAP; if the customer's BP already exists (made earlier for a quote) it moves straight to BP created. Otherwise every SAP push (15 min) and every cron run re-checks, and the enquiry moves to BP created with the SAP code the moment the BP appears. A "possible" match can be confirmed in the form with **Yes, link CODE** or by typing the code.
+  - Every stage change is logged with who and when (stage history in the form; SAP sync shows as "SAP sync"). Excel export carries the stage, rejection reason, PO ref, order date, BP date and SAP code.
 - **SAP check**: every lead and enquiry is checked against the SAP customers by GSTIN, email, phone, company name and address (city / pincode). It shows **Existing SAP customer**, **Possibly an SAP customer** or **New customer**, and flags any open enquiry from the same company.
 - **Follow-ups** have a date **and time**. The person assigned gets a WhatsApp reminder at that time, or at 9:30 am if no time is given. This runs from the same 15-minute cron job (`/api/cron?job=mail`), so there is nothing extra to set up. Reminders are only sent for follow-ups that fell due in the last 6 hours.
 - Staff need their **mobile number** in Admin → Users to get these messages.

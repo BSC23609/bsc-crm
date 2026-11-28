@@ -388,3 +388,27 @@ export async function sapCheck(sql, x) {
   const code = m.code || m.suggest;
   return { ...m, name: code ? _m.M.byCode.get(code) || null : null };
 }
+
+/* ---------------- Order received -> BP created ----------------
+   After each SAP sync (and every 15 minutes), enquiries marked "Order received" are checked against SAP again.
+   As soon as the customer is found (GSTIN, email, phone, exact name or name + address) the enquiry moves to "BP created". */
+export async function bpCheck(sql) {
+  const open = await sql`SELECT id, ref, company, gstin, phone, email, city, pincode, owner_email FROM crm_enquiries WHERE status = 'order_received'`;
+  if (!open.length) return { checked: 0, created: 0 };
+  _m = null;   // always use the freshest SAP data here
+  let created = 0;
+  for (const e of open) {
+    const r = await sapCheck(sql, e);
+    if (r.status !== 'existing') {
+      await sql`UPDATE crm_enquiries SET sap_status = ${r.status}, match_basis = ${r.basis || null}, suggest_code = ${r.suggest || null} WHERE id = ${e.id}`;
+      continue;
+    }
+    await sql`UPDATE crm_enquiries SET status = 'bp_created', card_code = ${r.code}, sap_status = 'existing', match_basis = ${r.basis}, suggest_code = ${r.code},
+        bp_at = now(), updated_at = now(), stage_log = stage_log || ${JSON.stringify([{ status: 'bp_created', at: new Date().toISOString(), by: 'SAP', code: r.code }])}::jsonb
+      WHERE id = ${e.id} AND status = 'order_received'`;
+    await sql`INSERT INTO crm_activities (enquiry_id, card_code, type, subject, notes, done, owner_email, created_by)
+      VALUES (${e.id}, ${r.code}, 'note', ${'BP created in SAP: ' + r.code}, ${'Matched by ' + r.basis + ' — ' + (r.name || '')}, true, ${e.owner_email}, 'SAP')`;
+    created++;
+  }
+  return { checked: open.length, created };
+}
